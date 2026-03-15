@@ -2,7 +2,7 @@
 
 An extended version of Docker Card, inspired by [vineetchoudhary/lovelace-docker-card](https://github.com/vineetchoudhary/lovelace-docker-card), that lets you view and control your Docker containers from Home Assistant. When paired with the official Home Assistant Portainer integration, every entity shown below already exists — no templates or shell commands required.
 
-![](screenshots/screenshot.png)
+![](screenshots/Screenshot_4_columns.png)
 
 ## Features
 
@@ -88,8 +88,6 @@ containers:
     health_entity: sensor.docker_deconz_health
     icon: mdi:zigbee
 ```
-
-![](screenshots/screenshot-expanded.png)
 
 ## Quick start (Portainer integration)
 
