@@ -2,11 +2,12 @@
  * Docker Card
  * A minimal Lovelace custom card to monitor and control Docker containers.
  * Inspired by vineetchoudhary/lovelace-docker-card
+ * Extended with WUD update support (update_entity)
  */
 
 (function () {
   const CARD_NAME = "docker-card";
-  const CARD_DESCRIPTION = "Modern Docker container overview with start/stop toggles and restart actions.";
+  const CARD_DESCRIPTION = "Modern Docker container overview with start/stop toggles, restart actions and WUD update tracking.";
   const DEFAULT_LANGUAGE = "en";
   const DEFAULT_TRANSLATIONS = {
     common: {
@@ -56,6 +57,12 @@
       online: "Online", offline: "Offline", idle: "Idle",
       running: "Running", stopped: "Stopped", unknown: "Unknown",
       starting: "Starting", degraded: "Degraded", paused: "Paused",
+    },
+    update: {
+      available: "Update available",
+      current: "Current",
+      new: "New",
+      days: "d ago",
     },
   };
 
@@ -158,9 +165,6 @@
     // ── CSS ──────────────────────────────────────────────────────────────────
 
     _css() {
-      // Responsive column formula: fills up to --dc-max-cols columns,
-      // auto-reducing when container is too narrow.
-      // min item width = 180px ensures graceful wrapping on small screens.
       return `
         .dc-card {
           display: block;
@@ -206,10 +210,10 @@
 
         /* ── Overview ── */
         .dc-overview {
-		  display: grid;
-		  grid-template-columns: repeat(var(--dc-max-cols), minmax(0, 1fr));
-		  gap: 0.4rem;
-		  margin-bottom: 0.85rem;
+          display: grid;
+          grid-template-columns: repeat(var(--dc-max-cols), minmax(0, 1fr));
+          gap: 0.4rem;
+          margin-bottom: 0.85rem;
         }
         .dc-ov-item {
           display: flex;
@@ -307,8 +311,8 @@
         /* ── Container list ── */
         .dc-list {
           display: grid;
-		  grid-template-columns: repeat(var(--dc-max-cols), minmax(0, 1fr));
-		  gap: 0.5rem;
+          grid-template-columns: repeat(var(--dc-max-cols), minmax(0, 1fr));
+          gap: 0.5rem;
         }
 
         /* ── Container row ── */
@@ -383,6 +387,45 @@
         }
         .dc-res-label { font-weight: 500; }
 
+        /* ── Update badge ── */
+        .dc-update {
+          display: flex;
+          align-items: center;
+          gap: 0.4rem;
+          margin-top: 0.25rem;
+          padding: 0.25rem 0.55rem;
+          border-radius: 6px;
+          background: rgba(244, 185, 66, 0.12);
+          border: 1px solid rgba(244, 185, 66, 0.35);
+          width: fit-content;
+          max-width: 100%;
+        }
+        .dc-update-dot {
+          width: 0.45rem;
+          height: 0.45rem;
+          border-radius: 50%;
+          background: #f4b942;
+          flex-shrink: 0;
+        }
+        .dc-update-text {
+          font-size: 0.68rem;
+          color: var(--primary-text-color);
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .dc-update-arrow {
+          color: #f4b942;
+          font-size: 0.68rem;
+          flex-shrink: 0;
+        }
+        .dc-update-days {
+          font-size: 0.62rem;
+          color: var(--secondary-text-color);
+          white-space: nowrap;
+          flex-shrink: 0;
+        }
+
         .dc-actions {
           display: flex;
           align-items: center;
@@ -418,7 +461,7 @@
           color: var(--secondary-text-color);
           font-size: 0.9rem;
         }
-		@media (max-width: 600px) {
+        @media (max-width: 600px) {
           .dc-overview, .dc-list {
             grid-template-columns: repeat(1, minmax(0, 1fr));
           }
@@ -538,6 +581,57 @@
         </div>`;
     }
 
+    // ── WUD update helpers ────────────────────────────────────────────────────
+
+    _getUpdateInfo(container) {
+      if (!container.update_entity) return null;
+      const entity = this._getEntity(container.update_entity);
+      if (!entity) return null;
+
+      const updateAvailable = entity.state === "Yes" ||
+        entity.attributes?.update_available === true;
+
+      if (!updateAvailable) return null;
+
+      const currentVersion = entity.attributes?.current_version || null;
+      const newVersion = entity.attributes?.new_version || null;
+      const daysAvailable = entity.attributes?.days_available ?? null;
+
+      // Don't show if new_version is missing or placeholder
+      if (!newVersion || newVersion === "–") return null;
+
+      return { currentVersion, newVersion, daysAvailable };
+    }
+
+    _renderUpdateBadge(updateInfo) {
+      if (!updateInfo) return "";
+
+      const { currentVersion, newVersion, daysAvailable } = updateInfo;
+
+      let versionHtml = "";
+      if (currentVersion && newVersion) {
+        versionHtml = `
+          <span class="dc-update-text">${this._esc(currentVersion)}</span>
+          <span class="dc-update-arrow">→</span>
+          <span class="dc-update-text">${this._esc(newVersion)}</span>`;
+      } else if (newVersion) {
+        versionHtml = `<span class="dc-update-text">${this._esc(newVersion)}</span>`;
+      }
+
+      const daysHtml = (daysAvailable !== null && daysAvailable !== undefined)
+        ? `<span class="dc-update-days">${daysAvailable}${this._t("update.days")}</span>`
+        : "";
+
+      return `
+        <div class="dc-update">
+          <span class="dc-update-dot"></span>
+          ${versionHtml}
+          ${daysHtml}
+        </div>`;
+    }
+
+    // ── Row render ────────────────────────────────────────────────────────────
+
     _renderRow(c) {
       const key = this._containerKey(c);
       const si = this._containerStatus(c);
@@ -586,6 +680,10 @@
         </div>`;
       }
 
+      // WUD update badge
+      const updateInfo = this._getUpdateInfo(c);
+      const updateHtml = this._renderUpdateBadge(updateInfo);
+
       const tapAction = this._normalizeAction(c.tap_action);
       const holdAction = this._normalizeAction(c.hold_action);
       const isActionable = (tapAction?.action && tapAction.action !== "none") || (holdAction?.action && holdAction.action !== "none");
@@ -603,6 +701,7 @@
             </div>
             ${imageHtml}
             ${resHtml}
+            ${updateHtml}
           </div>
           <div class="dc-actions">
             <ha-switch data-key="${key}"
