@@ -11,7 +11,8 @@ An extended version of Docker Card, inspired by [vineetchoudhary/lovelace-docker
 - Collapsible container section
 - Responsive multi-column layout that adapts to screen size — set `columns: 3` for three columns on wide screens, automatically reduces on smaller screens
 - Per-container icons, health status indicators, and image version display
-- **WUD update tracking** — shows available updates with current → new version and how many days the update has been available (requires a running [What's Up Docker](https://github.com/getwud/wud) instance and the [WUD Updates Monitor integration](https://github.com/johro897/What-s-up-Docker-Updates-Monitor))
+- **WUD update tracking** — shows available updates with current → new version and how many days the update has been available (requires a running [What's Up Docker](https://github.com/getwud/wud) instance and the [WUD Monitor](https://github.com/johro897/wud-monitor) HA integration)
+- **WUD overview tiles** — shows last scan time and a one-click Force Scan button directly in the card overview
 - Theme-aware styling with configurable running vs not-running accent colors
 - Works out-of-the-box with entities from the Portainer integration; also supports any toggle-friendly domain (`switch`, `input_boolean`, `light`, etc.)
 - Optional tap/hold actions per container row for quick navigation, service calls, or external links
@@ -20,7 +21,7 @@ An extended version of Docker Card, inspired by [vineetchoudhary/lovelace-docker
 
 - Home Assistant 2025.8 or newer
 - Docker managed via the official Portainer integration (provides all referenced sensors, switches, and buttons)
-- **Optional but recommended:** A running [What's Up Docker (WUD)](https://github.com/getwud/wud) instance with the [WUD Monitor](https://github.com/johro897/wud-monitor) HA integration installed — required for update tracking per container
+- **Optional but recommended:** A running [What's Up Docker (WUD)](https://github.com/getwud/wud) instance (tested with WUD 8.2+) with the [WUD Monitor](https://github.com/johro897/wud-monitor) HA integration installed — required for update tracking and scan controls
 - Optional: For non-Portainer environments, equivalent entities (sensors, binary_sensors, switches, scripts, etc.) that expose Docker data and operations
 
 > [!IMPORTANT]
@@ -53,32 +54,47 @@ Installation is easiest via [HACS](https://hacs.xyz/). Once you have HACS set up
 
 ---
 
-## WUD update tracking
+## WUD integration
 
-To show update badges on containers you need:
+To use WUD update tracking and scan controls you need:
 
 1. A running [What's Up Docker](https://github.com/getwud/wud) instance (tested with WUD 8.2+)
-2. The [WUD Updates Monitor](https://github.com/johro897/What-s-up-Docker-Updates-Monitor) integration installed in Home Assistant
+2. The [WUD Monitor](https://github.com/johro897/wud-monitor) integration installed in Home Assistant
 3. Each container in WUD labelled with `wud.watch: "true"` in its `docker-compose.yml`
 
-Once installed, the integration creates one sensor per monitored container. Add the sensor to the card using `update_entity`:
+### Per-container update badge
+
+Add `update_entity` to a container pointing to its WUD Monitor sensor:
 
 ```yaml
 containers:
   - name: ESPHome
     status_entity: sensor.docker_esphome_state
     control_entity: switch.esphome_container
-    update_entity: sensor.esphome_update_available   # ← WUD sensor
+    update_entity: sensor.esphome_update_available   # ← WUD Monitor sensor
     icon: mdi:chip
 ```
 
-When an update is available the card shows an inline badge with:
-- Current version → new version
-- How many days the update has been available
+When an update is available the card shows an inline badge with current → new version and how many days it has been available.
 
 ![](screenshots/screenshot_wud.png)
+
+### Overview tiles — Last scan & Force Scan
+
+Add `wud_last_poll` and `wud_scan` to `docker_overview` to show the last scan timestamp and a one-click scan button alongside your other overview stats:
+
+```yaml
+docker_overview:
+  containers_running: sensor.docker_containers_running
+  container_count: sensor.docker_containers_total
+  wud_last_poll: sensor.wud_wud_last_poll        # ← last scan timestamp
+  wud_scan: button.wud_wud_force_scan_all        # ← triggers immediate scan
+```
+
+Clicking **Scan now** calls `button.press` on the WUD Monitor Force Scan button. The tile shows "Scanning…" for 3 seconds while the action completes.
+
 > [!NOTE]
-> Without a WUD instance and the WUD Updates Monitor integration, `update_entity` has no effect — the rest of the card works normally.
+> Without the WUD Monitor integration, `update_entity`, `wud_last_poll`, and `wud_scan` have no effect — the rest of the card works normally.
 
 ---
 
@@ -98,6 +114,8 @@ docker_overview:
   operating_system: sensor.host_os
   operating_system_version: sensor.host_os_version
   status: binary_sensor.docker_daemon_status
+  wud_last_poll: sensor.wud_wud_last_poll
+  wud_scan: button.wud_wud_force_scan_all
 running_color: "var(--state-active-color)"
 not_running_color: "#c22040"
 containers:
@@ -168,6 +186,8 @@ containers:
 | `image_count` | Number of Docker images |
 | `operating_system` | Host OS name |
 | `operating_system_version` | Host OS version |
+| `wud_last_poll` | WUD Monitor sensor — shows timestamp of last WUD scan |
+| `wud_scan` | WUD Monitor button — click to trigger an immediate scan of all containers |
 
 ### Container options
 
@@ -184,7 +204,7 @@ containers:
 | `memory_entity` | No | Sensor for memory usage (%) |
 | `image_version_entity` | No | Sensor showing the current image tag/version |
 | `health_entity` | No | Sensor for container health (`healthy`, `unhealthy`, `starting`) |
-| `update_entity` | No | WUD sensor for update tracking — requires WUD + WUD Updates Monitor integration |
+| `update_entity` | No | WUD Monitor sensor for update tracking — requires WUD + WUD Monitor integration |
 | `running_color` | No | Per-container override for running accent color |
 | `not_running_color` | No | Per-container override for stopped accent color |
 | `running_states` | No | Custom list of states that count as "running" |
@@ -263,7 +283,8 @@ shell_command:
 | Entities missing | Check that the Portainer integration is connected and entity IDs match your YAML |
 | Colors not updating | Reload the dashboard after changing color values; check for typos in CSS variables or hex codes |
 | Toggle not working | Ensure `control_entity` uses a supported domain (`switch`, `input_boolean`, etc.) — `binary_sensor` is read-only |
-| Update badge not showing | Verify WUD is running, the WUD Updates Monitor integration is installed, and `update_entity` points to the correct sensor |
+| Update badge not showing | Verify WUD is running, the WUD Monitor integration is installed, and `update_entity` points to the correct sensor |
+| Scan button not working | Verify the WUD Monitor integration is installed and `wud_scan` points to the correct `button.*` entity |
 
 ---
 
