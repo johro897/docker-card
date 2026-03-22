@@ -1,12 +1,13 @@
 /*
  * Docker Card
  * A minimal Lovelace custom card to monitor and control Docker containers.
- * Inspired by vineetchoudhary/lovelace-docker-card
+ * Inspired by vineetchoudhary/lovelace-docker-card but fully re-written
+ * Extended with WUD Monitor integration (update_entity, wud_last_poll, wud_scan)
  */
 
 (function () {
   const CARD_NAME = "docker-card";
-  const CARD_DESCRIPTION = "Modern Docker container overview with start/stop toggles and restart actions.";
+  const CARD_DESCRIPTION = "Modern Docker container overview with start/stop toggles, restart actions and WUD update tracking.";
   const DEFAULT_LANGUAGE = "en";
   const DEFAULT_TRANSLATIONS = {
     common: {
@@ -23,10 +24,14 @@
       images: "Images",
       docker: "Docker",
       os: "OS",
+      wud_last_poll: "Last WUD Scan",
+      wud_scan: "Force Scan",
       running_total_aria: "Open running containers details",
       images_aria: "Open Docker images details",
       docker_aria: "Open Docker version details",
       os_aria: "Open operating system details",
+      wud_last_poll_aria: "Open WUD last poll details",
+      wud_scan_aria: "Trigger WUD scan now",
     },
     container: { image: "Image" },
     aria: {
@@ -51,11 +56,19 @@
       failed_restart: "Failed to restart {name}.",
       missing_toggle: "No service configured to {action} {name}.",
       missing_restart: "No restart service configured for {name}.",
+      wud_scan_triggered: "WUD scan triggered.",
+      wud_scan_failed: "WUD scan failed.",
     },
     status: {
       online: "Online", offline: "Offline", idle: "Idle",
       running: "Running", stopped: "Stopped", unknown: "Unknown",
       starting: "Starting", degraded: "Degraded", paused: "Paused",
+    },
+    update: {
+      available: "Update available",
+      current: "Current",
+      new: "New",
+      days: "d ago",
     },
   };
 
@@ -124,6 +137,7 @@
       this._expanded = false;
       this._listId = `dc-list-${cryptoRandom()}`;
       this._columns = 1;
+      this._wudScanPending = false;
     }
 
     setConfig(config) {
@@ -158,9 +172,6 @@
     // ── CSS ──────────────────────────────────────────────────────────────────
 
     _css() {
-      // Responsive column formula: fills up to --dc-max-cols columns,
-      // auto-reducing when container is too narrow.
-      // min item width = 180px ensures graceful wrapping on small screens.
       return `
         .dc-card {
           display: block;
@@ -206,10 +217,10 @@
 
         /* ── Overview ── */
         .dc-overview {
-		  display: grid;
-		  grid-template-columns: repeat(var(--dc-max-cols), minmax(0, 1fr));
-		  gap: 0.4rem;
-		  margin-bottom: 0.85rem;
+          display: grid;
+          grid-template-columns: repeat(var(--dc-max-cols), minmax(0, 1fr));
+          gap: 0.4rem;
+          margin-bottom: 0.85rem;
         }
         .dc-ov-item {
           display: flex;
@@ -228,6 +239,16 @@
         }
         .dc-ov-item.actionable:hover { border-color: var(--primary-color); }
         .dc-ov-item.actionable:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
+
+        /* WUD scan button tile — styled like other overview tiles but with button accent */
+        .dc-ov-item.wud-scan {
+          cursor: pointer;
+          border-color: rgba(var(--rgb-primary-color, 3,169,244), 0.3);
+          transition: border-color 0.15s ease, opacity 0.15s ease;
+        }
+        .dc-ov-item.wud-scan:hover { border-color: var(--primary-color); }
+        .dc-ov-item.wud-scan.pending { opacity: 0.5; cursor: progress; pointer-events: none; }
+        .dc-ov-item.wud-scan:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
         .dc-ov-badge {
           width: 1.9rem;
           height: 1.9rem;
@@ -243,6 +264,7 @@
           color: var(--secondary-text-color);
           flex-shrink: 0;
         }
+        .dc-ov-badge.wud { background: rgba(var(--rgb-primary-color, 3,169,244), 0.15); color: var(--primary-color); }
         .dc-ov-text {
           display: flex;
           flex-direction: column;
@@ -266,6 +288,7 @@
         }
         .dc-ov-value.running   { color: var(--dc-rc); }
         .dc-ov-value.not-running { color: var(--dc-nrc); }
+        .dc-ov-value.wud-action { color: var(--primary-color); font-size: 0.78rem; }
 
         /* ── Section header ── */
         .dc-section-header {
@@ -307,8 +330,8 @@
         /* ── Container list ── */
         .dc-list {
           display: grid;
-		  grid-template-columns: repeat(var(--dc-max-cols), minmax(0, 1fr));
-		  gap: 0.5rem;
+          grid-template-columns: repeat(var(--dc-max-cols), minmax(0, 1fr));
+          gap: 0.5rem;
         }
 
         /* ── Container row ── */
@@ -383,6 +406,45 @@
         }
         .dc-res-label { font-weight: 500; }
 
+        /* ── Update badge ── */
+        .dc-update {
+          display: flex;
+          align-items: center;
+          gap: 0.4rem;
+          margin-top: 0.25rem;
+          padding: 0.25rem 0.55rem;
+          border-radius: 6px;
+          background: rgba(244, 185, 66, 0.12);
+          border: 1px solid rgba(244, 185, 66, 0.35);
+          width: fit-content;
+          max-width: 100%;
+        }
+        .dc-update-dot {
+          width: 0.45rem;
+          height: 0.45rem;
+          border-radius: 50%;
+          background: #f4b942;
+          flex-shrink: 0;
+        }
+        .dc-update-text {
+          font-size: 0.68rem;
+          color: var(--primary-text-color);
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .dc-update-arrow {
+          color: #f4b942;
+          font-size: 0.68rem;
+          flex-shrink: 0;
+        }
+        .dc-update-days {
+          font-size: 0.62rem;
+          color: var(--secondary-text-color);
+          white-space: nowrap;
+          flex-shrink: 0;
+        }
+
         .dc-actions {
           display: flex;
           align-items: center;
@@ -418,7 +480,7 @@
           color: var(--secondary-text-color);
           font-size: 0.9rem;
         }
-		@media (max-width: 600px) {
+        @media (max-width: 600px) {
           .dc-overview, .dc-list {
             grid-template-columns: repeat(1, minmax(0, 1fr));
           }
@@ -466,6 +528,8 @@
       this._bindEvents();
     }
 
+    // ── Overview ─────────────────────────────────────────────────────────────
+
     _renderOverview() {
       const oc = this.config.docker_overview;
       if (!oc || typeof oc !== "object") return "";
@@ -478,6 +542,7 @@
 
       const items = [];
 
+      // Running / Total
       const running = get("containers_running");
       const total = get("container_count");
       const rv = `${this._fmtState(running.state)} / ${this._fmtState(total.state)}`;
@@ -488,32 +553,72 @@
         items.push({ label: this._t("overview.running_total"), value: rv, badge: "RT", cls, entityId: running.entityId, aria: this._t("overview.running_total_aria") });
       }
 
+      // Images
       const images = get("image_count");
       const iv = this._fmtState(images.state);
       if (!this._isBlank(iv)) items.push({ label: this._t("overview.images"), value: iv, badge: "IMG", entityId: images.entityId, aria: this._t("overview.images_aria") });
 
+      // Docker version
       const docker = get("docker_version");
       const dv = this._fmtState(docker.state);
       if (!this._isBlank(dv)) items.push({ label: this._t("overview.docker"), value: dv, badge: "DOC", entityId: docker.entityId, aria: this._t("overview.docker_aria") });
 
+      // OS
       const osn = get("operating_system");
       const osv = get("operating_system_version");
       const osl = this._fmtState(osn.state);
       const osvl = this._fmtState(osv.state);
-      let osVal = osl !== "—" && osvl !== "—" ? `${osl} · ${osvl}` : osl !== "—" ? osl : osvl !== "—" ? osvl : "";
+      const osVal = osl !== "—" && osvl !== "—" ? `${osl} · ${osvl}` : osl !== "—" ? osl : osvl !== "—" ? osvl : "";
       if (!this._isBlank(osVal)) items.push({ label: this._t("overview.os"), value: osVal, badge: "OS", entityId: osv.entityId || osn.entityId, aria: this._t("overview.os_aria") });
 
-      if (!items.length) return "";
+      // WUD last poll — sensor tile showing last scan timestamp
+      if (oc.wud_last_poll) {
+        const e = this._getEntity(oc.wud_last_poll);
+        const val = this._fmtState(e?.state);
+        items.push({
+          label: this._t("overview.wud_last_poll"),
+          value: val,
+          badge: "WUD",
+          badgeCls: "wud",
+          entityId: oc.wud_last_poll,
+          aria: this._t("overview.wud_last_poll_aria"),
+        });
+      }
 
-      return `<div class="dc-overview">${items.map((item) => `
+      if (!items.length && !oc.wud_scan) return "";
+
+      // Render standard info tiles
+      let html = `<div class="dc-overview">`;
+      html += items.map((item) => `
         <div class="dc-ov-item${item.entityId ? " actionable" : ""}"
           ${item.entityId ? `role="button" tabindex="0" aria-label="${this._esc(item.aria || "")}" data-more-info="${item.entityId}"` : ""}>
-          <div class="dc-ov-badge">${item.badge}</div>
+          <div class="dc-ov-badge${item.badgeCls ? " " + item.badgeCls : ""}">${item.badge}</div>
           <div class="dc-ov-text">
             <div class="dc-ov-label">${this._esc(item.label)}</div>
             <div class="dc-ov-value${item.cls ? " " + item.cls : ""}">${this._esc(item.value)}</div>
           </div>
-        </div>`).join("")}</div>`;
+        </div>`).join("");
+
+      // WUD scan button tile — rendered separately as it triggers an action, not more-info
+      if (oc.wud_scan) {
+        const scanCls = this._wudScanPending ? " pending" : "";
+        html += `
+          <div class="dc-ov-item wud-scan${scanCls}"
+            role="button" tabindex="0"
+            aria-label="${this._t("overview.wud_scan_aria")}"
+            data-wud-scan="${this._esc(oc.wud_scan)}">
+            <div class="dc-ov-badge wud">
+              <ha-icon icon="mdi:refresh" style="--mdc-icon-size:1rem"></ha-icon>
+            </div>
+            <div class="dc-ov-text">
+              <div class="dc-ov-label">${this._t("overview.wud_scan")}</div>
+              <div class="dc-ov-value wud-action">${this._wudScanPending ? "Scanning…" : "Scan now"}</div>
+            </div>
+          </div>`;
+      }
+
+      html += `</div>`;
+      return html;
     }
 
     _renderSection() {
@@ -537,6 +642,57 @@
           </div>
         </div>`;
     }
+
+    // ── WUD update helpers ────────────────────────────────────────────────────
+
+    _getUpdateInfo(container) {
+      if (!container.update_entity) return null;
+      const entity = this._getEntity(container.update_entity);
+      if (!entity) return null;
+
+      const updateAvailable = entity.state === "Yes" ||
+        entity.attributes?.update_available === true;
+
+      if (!updateAvailable) return null;
+
+      const currentVersion = entity.attributes?.current_version || null;
+      const newVersion = entity.attributes?.new_version || null;
+      const daysAvailable = entity.attributes?.days_available ?? null;
+
+      // Don't show if new_version is missing or placeholder
+      if (!newVersion || newVersion === "–") return null;
+
+      return { currentVersion, newVersion, daysAvailable };
+    }
+
+    _renderUpdateBadge(updateInfo) {
+      if (!updateInfo) return "";
+
+      const { currentVersion, newVersion, daysAvailable } = updateInfo;
+
+      let versionHtml = "";
+      if (currentVersion && newVersion) {
+        versionHtml = `
+          <span class="dc-update-text">${this._esc(currentVersion)}</span>
+          <span class="dc-update-arrow">→</span>
+          <span class="dc-update-text">${this._esc(newVersion)}</span>`;
+      } else if (newVersion) {
+        versionHtml = `<span class="dc-update-text">${this._esc(newVersion)}</span>`;
+      }
+
+      const daysHtml = (daysAvailable !== null && daysAvailable !== undefined)
+        ? `<span class="dc-update-days">${daysAvailable}${this._t("update.days")}</span>`
+        : "";
+
+      return `
+        <div class="dc-update">
+          <span class="dc-update-dot"></span>
+          ${versionHtml}
+          ${daysHtml}
+        </div>`;
+    }
+
+    // ── Row render ────────────────────────────────────────────────────────────
 
     _renderRow(c) {
       const key = this._containerKey(c);
@@ -586,6 +742,10 @@
         </div>`;
       }
 
+      // WUD update badge
+      const updateInfo = this._getUpdateInfo(c);
+      const updateHtml = this._renderUpdateBadge(updateInfo);
+
       const tapAction = this._normalizeAction(c.tap_action);
       const holdAction = this._normalizeAction(c.hold_action);
       const isActionable = (tapAction?.action && tapAction.action !== "none") || (holdAction?.action && holdAction.action !== "none");
@@ -603,6 +763,7 @@
             </div>
             ${imageHtml}
             ${resHtml}
+            ${updateHtml}
           </div>
           <div class="dc-actions">
             <ha-switch data-key="${key}"
@@ -631,6 +792,30 @@
         el.addEventListener("click", () => this._showMoreInfo(entityId));
         el.addEventListener("keydown", (e) => {
           if (e.key === "Enter" || e.key === " ") { e.preventDefault(); this._showMoreInfo(entityId); }
+        });
+      });
+
+      // WUD scan button in overview
+      this.querySelectorAll("[data-wud-scan]").forEach((el) => {
+        const entityId = el.dataset.wudScan;
+        const handler = async () => {
+          if (this._wudScanPending || !entityId || !this._hass) return;
+          this._wudScanPending = true;
+          this.render();
+          try {
+            await this._hass.callService("button", "press", { entity_id: entityId });
+            this._notify(this._t("notifications.wud_scan_triggered"));
+          } catch (err) {
+            console.error("docker-card: WUD scan failed", err);
+            this._notify(this._t("notifications.wud_scan_failed"));
+          } finally {
+            // Keep pending state briefly so the user sees feedback
+            setTimeout(() => { this._wudScanPending = false; this.render(); }, 3000);
+          }
+        };
+        el.addEventListener("click", handler);
+        el.addEventListener("keydown", (e) => {
+          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handler(); }
         });
       });
 
