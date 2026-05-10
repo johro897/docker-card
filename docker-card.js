@@ -3,11 +3,12 @@
  * A minimal Lovelace custom card to monitor and control Docker containers.
  * Inspired by vineetchoudhary/lovelace-docker-card but fully re-written
  * Extended with WUD Monitor integration (update_entity, wud_last_poll, wud_scan)
+ * Extended with pause/resume support per container and paused count in overview
  */
 
 (function () {
   const CARD_NAME = "docker-card";
-  const CARD_DESCRIPTION = "Modern Docker container overview with start/stop toggles, restart actions and WUD update tracking.";
+  const CARD_DESCRIPTION = "Modern Docker container overview with start/stop toggles, pause/resume, restart actions and WUD update tracking.";
   const DEFAULT_LANGUAGE = "en";
   const DEFAULT_TRANSLATIONS = {
     common: {
@@ -21,6 +22,7 @@
     },
     overview: {
       running_total: "Running / Total",
+      running_paused_stopped: "Running · Paused · Stopped",
       images: "Images",
       docker: "Docker",
       os: "OS",
@@ -43,9 +45,13 @@
     actions: {
       start: "start",
       stop: "stop",
+      pause: "pause",
+      resume: "resume",
       restart: "Restart",
       start_container: "Start container",
       stop_container: "Stop container",
+      pause_container: "Pause container",
+      resume_container: "Resume container",
     },
     notifications: {
       starting: "Starting {name}…",
@@ -54,8 +60,14 @@
       failed_stop: "Failed to stop {name}. Check logs.",
       restarting: "Restarting {name}…",
       failed_restart: "Failed to restart {name}.",
+      pausing: "Pausing {name}…",
+      resuming: "Resuming {name}…",
+      failed_pause: "Failed to pause {name}. Check logs.",
+      failed_resume: "Failed to resume {name}. Check logs.",
       missing_toggle: "No service configured to {action} {name}.",
       missing_restart: "No restart service configured for {name}.",
+      missing_pause: "No pause service configured for {name}.",
+      missing_resume: "No resume service configured for {name}.",
       wud_scan_triggered: "WUD scan triggered.",
       wud_scan_failed: "WUD scan failed.",
     },
@@ -112,6 +124,14 @@
     automation: { service: "trigger" },
   };
 
+  // Pause/unpause entity domains. A button entity press is used for both
+  // pause and resume (two separate button entities), or explicit services.
+  const PAUSE_SERVICE_MAP = {
+    button: { service: "press" },
+    script: { service: "turn_on" },
+    automation: { service: "trigger" },
+  };
+
   const domainFromEntityId = (entityId) => {
     if (typeof entityId !== "string") return undefined;
     const i = entityId.indexOf(".");
@@ -148,8 +168,10 @@
       this.config = {
         running_states: ["running", "on", "started", "up"],
         stopped_states: ["stopped", "off", "exited", "down", "inactive"],
+        paused_states: ["paused", "pause"],
         running_color: "var(--state-active-color, #2e8f57)",
         not_running_color: "var(--state-error-color, #c22040)",
+        paused_color: "var(--state-warning-color, #f4b942)",
         ...nc,
         containers,
       };
@@ -240,7 +262,7 @@
         .dc-ov-item.actionable:hover { border-color: var(--primary-color); }
         .dc-ov-item.actionable:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
 
-        /* WUD scan button tile — styled like other overview tiles but with button accent */
+        /* WUD scan button tile */
         .dc-ov-item.wud-scan {
           cursor: pointer;
           border-color: rgba(var(--rgb-primary-color, 3,169,244), 0.3);
@@ -289,6 +311,21 @@
         .dc-ov-value.running   { color: var(--dc-rc); }
         .dc-ov-value.not-running { color: var(--dc-nrc); }
         .dc-ov-value.wud-action { color: var(--primary-color); font-size: 0.78rem; }
+
+        /* Running · Paused · Stopped breakdown */
+        .dc-ov-counts {
+          display: flex;
+          align-items: center;
+          gap: 0.35rem;
+          flex-wrap: nowrap;
+          font-size: 0.82rem;
+          font-weight: 600;
+        }
+        .dc-ov-count { white-space: nowrap; }
+        .dc-ov-count.running  { color: var(--dc-rc); }
+        .dc-ov-count.paused   { color: var(--dc-pc); }
+        .dc-ov-count.stopped  { color: var(--dc-nrc); }
+        .dc-ov-sep { color: var(--divider-color, rgba(128,128,128,0.5)); font-weight: 400; }
 
         /* ── Section header ── */
         .dc-section-header {
@@ -348,6 +385,7 @@
           min-width: 0;
         }
         .dc-row.running  { border-color: var(--dc-rc); }
+        .dc-row.paused   { border-color: var(--dc-pc); }
         .dc-row.stopped,
         .dc-row.unknown  { border-color: var(--dc-nrc); }
         .dc-row.pending  { opacity: 0.6; cursor: progress; }
@@ -383,6 +421,7 @@
           color: var(--secondary-text-color);
         }
         .dc-status.running  { color: var(--dc-rc); }
+        .dc-status.paused   { color: var(--dc-pc); }
         .dc-status.stopped,
         .dc-status.unknown  { color: var(--dc-nrc); }
         .dc-image {
@@ -467,6 +506,24 @@
         .dc-restart:hover  { border-color: var(--primary-color); color: var(--primary-color); }
         .dc-restart:active { background: var(--primary-color); color: #fff; border-color: var(--primary-color); }
         .dc-restart:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        /* Pause / Resume button — amber accent to match paused state */
+        .dc-pause {
+          border: 1px solid var(--divider-color, rgba(128,128,128,0.3));
+          background: transparent;
+          color: var(--primary-text-color);
+          font: inherit;
+          font-size: 0.75rem;
+          border-radius: 999px;
+          padding: 0.28rem 0.75rem;
+          cursor: pointer;
+          transition: border-color 0.15s ease, color 0.15s ease;
+          white-space: nowrap;
+        }
+        .dc-pause:hover  { border-color: var(--dc-pc); color: var(--dc-pc); }
+        .dc-pause:active { background: var(--dc-pc); color: #fff; border-color: var(--dc-pc); }
+        .dc-pause:disabled { opacity: 0.5; cursor: not-allowed; }
+
         ha-switch[disabled] { opacity: 0.5; }
 
         .dc-empty {
@@ -505,13 +562,14 @@
 
       const rc = this.config.running_color;
       const nrc = this.config.not_running_color;
+      const pc = this.config.paused_color;
       const cols = this._columns;
 
       const status = this._computeOverallStatus();
       const pillClasses = ["dc-pill", status.cssClass, status.tone === "not_running" ? "not-running" : "", status.entityId ? "actionable" : ""].filter(Boolean).join(" ");
 
       this.innerHTML = `
-        <div class="dc-card" style="--dc-rc:${rc};--dc-nrc:${nrc};--dc-max-cols:${cols}">
+        <div class="dc-card" style="--dc-rc:${rc};--dc-nrc:${nrc};--dc-pc:${pc};--dc-max-cols:${cols}">
           <style>${this._css()}</style>
           <div class="dc-header">
             <div class="dc-title">${this._esc(this.config.title || this._t("common.card_title"))}</div>
@@ -542,15 +600,47 @@
 
       const items = [];
 
-      // Running / Total
+      // Running · Paused · Stopped breakdown
+      // Uses containers_running, containers_paused (optional), containers_stopped (optional),
+      // and container_count as fallback total.
       const running = get("containers_running");
+      const paused = get("containers_paused");
+      const stopped = get("containers_stopped");
       const total = get("container_count");
-      const rv = `${this._fmtState(running.state)} / ${this._fmtState(total.state)}`;
-      if (!this._isBlank(rv)) {
-        const rc = this._parseIntState(running.state);
-        const tc = this._parseIntState(total.state);
-        const cls = (typeof rc === "number" && typeof tc === "number" && rc !== tc) ? "not-running" : "running";
-        items.push({ label: this._t("overview.running_total"), value: rv, badge: "RT", cls, entityId: running.entityId, aria: this._t("overview.running_total_aria") });
+
+      const rv = this._parseIntState(running.state);
+      const pv = this._parseIntState(paused.state);
+      const sv = this._parseIntState(stopped.state);
+      const tv = this._parseIntState(total.state);
+
+      const hasCounts = typeof rv === "number" || typeof pv === "number" || typeof sv === "number";
+      if (hasCounts || typeof tv === "number") {
+        // Build inline count display: "2 running · 1 paused · 0 stopped"
+        // Falls back to "running / total" if only running+total are available (legacy).
+        const hasPausedOrStopped = typeof pv === "number" || typeof sv === "number";
+
+        let countHtml;
+        if (hasPausedOrStopped) {
+          const parts = [];
+          if (typeof rv === "number") parts.push(`<span class="dc-ov-count running">${rv} running</span>`);
+          if (typeof pv === "number") parts.push(`<span class="dc-ov-count paused">${pv} paused</span>`);
+          if (typeof sv === "number") parts.push(`<span class="dc-ov-count stopped">${sv} stopped</span>`);
+          countHtml = parts.join('<span class="dc-ov-sep"> · </span>');
+        } else {
+          // Legacy: running / total
+          const rStr = this._fmtState(running.state);
+          const tStr = this._fmtState(total.state);
+          const cls = (typeof rv === "number" && typeof tv === "number" && rv !== tv) ? "not-running" : "running";
+          countHtml = `<span class="dc-ov-count ${cls}">${rStr} / ${tStr}</span>`;
+        }
+
+        items.push({
+          label: hasPausedOrStopped ? this._t("overview.running_paused_stopped") : this._t("overview.running_total"),
+          customValueHtml: `<div class="dc-ov-counts">${countHtml}</div>`,
+          badge: "RT",
+          entityId: running.entityId,
+          aria: this._t("overview.running_total_aria"),
+        });
       }
 
       // Images
@@ -571,7 +661,7 @@
       const osVal = osl !== "—" && osvl !== "—" ? `${osl} · ${osvl}` : osl !== "—" ? osl : osvl !== "—" ? osvl : "";
       if (!this._isBlank(osVal)) items.push({ label: this._t("overview.os"), value: osVal, badge: "OS", entityId: osv.entityId || osn.entityId, aria: this._t("overview.os_aria") });
 
-      // WUD last poll — sensor tile showing last scan timestamp
+      // WUD last poll
       if (oc.wud_last_poll) {
         const e = this._getEntity(oc.wud_last_poll);
         const val = this._fmtState(e?.state);
@@ -587,7 +677,6 @@
 
       if (!items.length && !oc.wud_scan) return "";
 
-      // Render standard info tiles
       let html = `<div class="dc-overview">`;
       html += items.map((item) => `
         <div class="dc-ov-item${item.entityId ? " actionable" : ""}"
@@ -595,11 +684,13 @@
           <div class="dc-ov-badge${item.badgeCls ? " " + item.badgeCls : ""}">${item.badge}</div>
           <div class="dc-ov-text">
             <div class="dc-ov-label">${this._esc(item.label)}</div>
-            <div class="dc-ov-value${item.cls ? " " + item.cls : ""}">${this._esc(item.value)}</div>
+            ${item.customValueHtml
+              ? item.customValueHtml
+              : `<div class="dc-ov-value${item.cls ? " " + item.cls : ""}">${this._esc(item.value)}</div>`}
           </div>
         </div>`).join("");
 
-      // WUD scan button tile — rendered separately as it triggers an action, not more-info
+      // WUD scan button tile
       if (oc.wud_scan) {
         const scanCls = this._wudScanPending ? " pending" : "";
         html += `
@@ -659,7 +750,6 @@
       const newVersion = entity.attributes?.new_version || null;
       const daysAvailable = entity.attributes?.days_available ?? null;
 
-      // Don't show if new_version is missing or placeholder
       if (!newVersion || newVersion === "–") return null;
 
       return { currentVersion, newVersion, daysAvailable };
@@ -700,6 +790,7 @@
       const pending = this._pending.has(key);
       const rc = c.running_color || this.config.running_color;
       const nrc = c.not_running_color || c.stopped_color || this.config.not_running_color;
+      const pc = c.paused_color || this.config.paused_color;
       const name = this._esc(c.name || this._friendlyName(c.status_entity || c.switch_entity));
 
       const iconHtml = c.icon
@@ -742,7 +833,6 @@
         </div>`;
       }
 
-      // WUD update badge
       const updateInfo = this._getUpdateInfo(c);
       const updateHtml = this._renderUpdateBadge(updateInfo);
 
@@ -750,10 +840,25 @@
       const holdAction = this._normalizeAction(c.hold_action);
       const isActionable = (tapAction?.action && tapAction.action !== "none") || (holdAction?.action && holdAction.action !== "none");
 
+      // Pause button label: show "Resume" when paused, "Pause" when running.
+      // Hidden entirely when container is stopped/unknown.
+      const showPauseBtn = si.isRunning || si.isPaused;
+      const pauseBtnLabel = si.isPaused ? this._t("actions.resume") : this._t("actions.pause");
+      const pauseBtnTitle = si.isPaused ? this._t("actions.resume_container") : this._t("actions.pause_container");
+      const pauseBtnDisabled = !si.canPause || pending;
+
+      const pauseBtnHtml = showPauseBtn
+        ? `<button class="dc-pause" data-key="${key}" data-pause-action="${si.isPaused ? "resume" : "pause"}"
+            ${pauseBtnDisabled ? "disabled" : ""}
+            title="${pauseBtnTitle}">
+            ${pauseBtnLabel}
+           </button>`
+        : "";
+
       return `
         <div class="dc-row ${si.cssClass}${pending ? " pending" : ""}${isActionable ? " actionable" : ""}"
           data-key="${key}"
-          style="--dc-rc:${rc};--dc-nrc:${nrc}"
+          style="--dc-rc:${rc};--dc-nrc:${nrc};--dc-pc:${pc}"
           ${isActionable ? `role="button" tabindex="0" aria-label="${name}"` : ""}>
           <div class="dc-info">
             <div class="dc-name">${iconHtml}<span>${name}</span></div>
@@ -768,9 +873,10 @@
           <div class="dc-actions">
             <ha-switch data-key="${key}"
               ${si.isRunning ? "checked" : ""}
-              ${!si.canToggle || pending ? "disabled" : ""}
+              ${!si.canToggle || pending || si.isPaused ? "disabled" : ""}
               title="${si.isRunning ? this._t("actions.stop_container") : this._t("actions.start_container")}">
             </ha-switch>
+            ${pauseBtnHtml}
             <button class="dc-restart" data-key="${key}" ${!si.canRestart || pending ? "disabled" : ""}>
               ${this._t("actions.restart")}
             </button>
@@ -795,7 +901,7 @@
         });
       });
 
-      // WUD scan button in overview
+      // WUD scan button
       this.querySelectorAll("[data-wud-scan]").forEach((el) => {
         const entityId = el.dataset.wudScan;
         const handler = async () => {
@@ -809,7 +915,6 @@
             console.error("docker-card: WUD scan failed", err);
             this._notify(this._t("notifications.wud_scan_failed"));
           } finally {
-            // Keep pending state briefly so the user sees feedback
             setTimeout(() => { this._wudScanPending = false; this.render(); }, 3000);
           }
         };
@@ -833,6 +938,16 @@
           e.stopPropagation();
           const c = this._findContainer(btn.dataset.key);
           if (c) this._handleRestart(c, btn);
+        });
+      });
+
+      // Pause / Resume buttons
+      this.querySelectorAll(".dc-pause[data-key]").forEach((btn) => {
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const c = this._findContainer(btn.dataset.key);
+          const action = btn.dataset.pauseAction; // "pause" or "resume"
+          if (c) this._handlePause(c, action === "resume", btn);
         });
       });
 
@@ -918,16 +1033,19 @@
       const rawState = entity ? entity.state : undefined;
       const runningStates = container.running_states || this.config.running_states;
       const stoppedStates = container.stopped_states || this.config.stopped_states;
+      const pausedStates = container.paused_states || this.config.paused_states;
       const norm = rawState ? rawState.toLowerCase() : undefined;
       const isRunning = norm ? runningStates.includes(norm) : false;
       const isStopped = norm ? stoppedStates.includes(norm) : false;
-      const cssClass = isRunning ? "running" : isStopped ? "stopped" : "unknown";
-      const label = this._prettyStatus(rawState, { runningStates, stoppedStates });
+      const isPaused = norm ? pausedStates.includes(norm) : false;
+      const cssClass = isRunning ? "running" : isPaused ? "paused" : isStopped ? "stopped" : "unknown";
+      const label = this._prettyStatus(rawState, { runningStates, stoppedStates, pausedStates });
       const controlEntityId = container.control_entity || container.switch_entity;
       const toggleCap = this._toggleCap(controlEntityId, container.control_domain || container.switch_domain);
       const canToggle = Boolean(toggleCap || (container.start_service && container.stop_service));
       const canRestart = Boolean(this._getRestartService(container));
-      return { entityId: stateEntityId, rawState, label, cssClass, isRunning, canToggle, canRestart };
+      const canPause = Boolean(this._getPauseService(container, false) || this._getPauseService(container, true));
+      return { entityId: stateEntityId, rawState, label, cssClass, isRunning, isStopped, isPaused, canToggle, canRestart, canPause };
     }
 
     _computeOverallStatus() {
@@ -948,9 +1066,11 @@
       const v = state.toLowerCase();
       const running = opts.runningStates || this.config.running_states;
       const stopped = opts.stoppedStates || this.config.stopped_states;
+      const paused = opts.pausedStates || this.config.paused_states;
       if (running.includes(v)) return this._t("status.running");
       if (stopped.includes(v)) return this._t("status.stopped");
-      const trans = { starting:"status.starting", degraded:"status.degraded", paused:"status.paused", unknown:"status.unknown", idle:"status.idle" };
+      if (paused.includes(v)) return this._t("status.paused");
+      const trans = { starting:"status.starting", degraded:"status.degraded", unknown:"status.unknown", idle:"status.idle" };
       if (trans[v]) return this._t(trans[v]);
       return state.charAt(0).toUpperCase() + state.slice(1);
     }
@@ -973,6 +1093,14 @@
       return { domain, entity_id: entityId, service: mapping.service };
     }
 
+    _pauseCap(entityId, domainOverride) {
+      if (!entityId) return undefined;
+      const domain = domainOverride || domainFromEntityId(entityId);
+      const mapping = domain ? PAUSE_SERVICE_MAP[domain] : undefined;
+      if (!mapping) return undefined;
+      return { domain, entity_id: entityId, service: mapping.service };
+    }
+
     _getRestartService(container) {
       if (!container) return undefined;
       if (container.restart_entity) {
@@ -980,6 +1108,37 @@
         if (cap) return { domain: cap.domain, service: cap.service, data: { entity_id: cap.entity_id } };
       }
       return this._normalizeSvc(container.restart_service);
+    }
+
+    /**
+     * Returns the service config for pause or resume.
+     *
+     * Container config keys:
+     *   pause_entity   — button/script entity to press when pausing
+     *   resume_entity  — button/script entity to press when resuming
+     *   pause_domain   — optional domain override for pause_entity
+     *   resume_domain  — optional domain override for resume_entity
+     *   pause_service  — explicit service string/object to call when pausing
+     *   resume_service — explicit service string/object to call when resuming
+     *
+     * @param {object} container
+     * @param {boolean} shouldResume  true = get resume service, false = get pause service
+     */
+    _getPauseService(container, shouldResume) {
+      if (!container) return undefined;
+      if (shouldResume) {
+        if (container.resume_entity) {
+          const cap = this._pauseCap(container.resume_entity, container.resume_domain);
+          if (cap) return { domain: cap.domain, service: cap.service, data: { entity_id: cap.entity_id } };
+        }
+        return this._normalizeSvc(container.resume_service);
+      } else {
+        if (container.pause_entity) {
+          const cap = this._pauseCap(container.pause_entity, container.pause_domain);
+          if (cap) return { domain: cap.domain, service: cap.service, data: { entity_id: cap.entity_id } };
+        }
+        return this._normalizeSvc(container.pause_service);
+      }
     }
 
     _resolveToggleService(container, shouldRun) {
@@ -1012,7 +1171,7 @@
       return this._hass.callService(service.domain, service.service, service.data || {});
     }
 
-    // ── Toggle / Restart ─────────────────────────────────────────────────────
+    // ── Toggle / Restart / Pause ─────────────────────────────────────────────
 
     async _handleToggle(container, shouldRun, toggleEl) {
       const key = this._containerKey(container);
@@ -1058,6 +1217,36 @@
       } catch (err) {
         console.error("docker-card restart error", err);
         this._notify(this._t("notifications.failed_restart", { name: displayName }));
+      } finally {
+        this._pending.delete(key);
+        buttonEl.disabled = false;
+        this.render();
+      }
+    }
+
+    async _handlePause(container, shouldResume, buttonEl) {
+      const displayName = container.name || this._friendlyName(container.status_entity);
+      const svcConfig = this._getPauseService(container, shouldResume);
+      if (!svcConfig) {
+        this._notify(shouldResume
+          ? this._t("notifications.missing_resume", { name: displayName })
+          : this._t("notifications.missing_pause", { name: displayName }));
+        return;
+      }
+      const key = this._containerKey(container);
+      buttonEl.disabled = true;
+      this._pending.set(key, shouldResume ? "resume" : "pause");
+      this.render();
+      try {
+        await this._callService(svcConfig);
+        this._notify(shouldResume
+          ? this._t("notifications.resuming", { name: displayName })
+          : this._t("notifications.pausing", { name: displayName }));
+      } catch (err) {
+        console.error("docker-card pause error", err);
+        this._notify(shouldResume
+          ? this._t("notifications.failed_resume", { name: displayName })
+          : this._t("notifications.failed_pause", { name: displayName }));
       } finally {
         this._pending.delete(key);
         buttonEl.disabled = false;
