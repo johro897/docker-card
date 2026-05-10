@@ -11,9 +11,10 @@ An extended version of Docker Card, inspired by [vineetchoudhary/lovelace-docker
 - Collapsible container section
 - Responsive multi-column layout that adapts to screen size — set `columns: 3` for three columns on wide screens, automatically reduces on smaller screens
 - Per-container icons, health status indicators, and image version display
+- **Pause / Resume support** — pause and resume individual containers directly from the card; paused containers are highlighted in amber and the toggle switch is automatically disabled to prevent invalid state transitions
 - **WUD update tracking** — shows available updates with current → new version and how many days the update has been available (requires a running [What's Up Docker](https://github.com/getwud/wud) instance and the [WUD Monitor](https://github.com/johro897/wud-monitor) HA integration)
 - **WUD overview tiles** — shows last scan time and a one-click Force Scan button directly in the card overview
-- Theme-aware styling with configurable running vs not-running accent colors
+- Theme-aware styling with configurable running / paused / not-running accent colors
 - Works out-of-the-box with entities from the Portainer integration; also supports any toggle-friendly domain (`switch`, `input_boolean`, `light`, etc.)
 - Optional tap/hold actions per container row for quick navigation, service calls, or external links
 
@@ -54,6 +55,41 @@ Installation is easiest via [HACS](https://hacs.xyz/). Once you have HACS set up
 
 ---
 
+## Pause / Resume
+
+Containers can be paused and resumed directly from the card without stopping them. When a container is paused:
+
+- The row border and status text turn **amber**
+- The toggle switch is **disabled** — start/stop is not available while paused
+- The **Pause** button changes to **Resume**
+
+Add `pause_entity` and `resume_entity` to a container pointing to the corresponding Portainer buttons:
+
+```yaml
+containers:
+  - name: Uptime Kuma
+    status_entity: sensor.uptime_kuma_state
+    control_entity: switch.uptime_kuma_container
+    pause_entity: button.uptime_kuma_pause_container
+    resume_entity: button.uptime_kuma_resume_container
+    restart_entity: button.uptime_kuma_restart_container
+    icon: mdi:timeline-plus
+```
+
+The Pause / Resume button is only shown when the container is **running** or **paused** — it is hidden for stopped containers.
+
+### Overview — Running · Paused · Stopped
+
+When `containers_paused` and/or `containers_stopped` are configured in `docker_overview`, the running tile expands to show a full breakdown:
+
+```
+2 running · 1 paused · 3 stopped
+```
+
+Without those sensors the tile falls back to the compact `running / total` format.
+
+---
+
 ## WUD integration
 
 To use WUD update tracking and scan controls you need:
@@ -69,9 +105,9 @@ Add `update_entity` to a container pointing to its WUD Monitor sensor:
 ```yaml
 containers:
   - name: ESPHome
-    status_entity: sensor.docker_esphome_state
+    status_entity: sensor.esphome_state
     control_entity: switch.esphome_container
-    update_entity: sensor.esphome_update_available   # ← WUD Monitor sensor
+    update_entity: sensor.esphome_update_available
     icon: mdi:chip
 ```
 
@@ -87,8 +123,8 @@ Add `wud_last_poll` and `wud_scan` to `docker_overview` to show the last scan ti
 docker_overview:
   containers_running: sensor.docker_containers_running
   container_count: sensor.docker_containers_total
-  wud_last_poll: sensor.wud_wud_last_poll        # ← last scan timestamp
-  wud_scan: button.wud_wud_force_scan_all        # ← triggers immediate scan
+  wud_last_poll: sensor.wud_wud_last_poll
+  wud_scan: button.wud_wud_force_scan_all
 ```
 
 Clicking **Scan now** calls `button.press` on the WUD Monitor Force Scan button. The tile shows "Scanning…" for 3 seconds while the action completes.
@@ -106,44 +142,52 @@ title: Docker @ MyServer
 containers_expanded: true
 columns: 3
 docker_overview:
+  status: binary_sensor.docker_daemon_status
   container_count: sensor.docker_containers_total
   containers_running: sensor.docker_containers_running
+  containers_paused: sensor.docker_containers_paused
   containers_stopped: sensor.docker_containers_stopped
   docker_version: sensor.docker_version
   image_count: sensor.docker_images
   operating_system: sensor.host_os
   operating_system_version: sensor.host_os_version
-  status: binary_sensor.docker_daemon_status
   wud_last_poll: sensor.wud_wud_last_poll
   wud_scan: button.wud_wud_force_scan_all
 running_color: "var(--state-active-color)"
 not_running_color: "#c22040"
+paused_color: "#f4b942"
 containers:
   - name: Home Assistant
-    status_entity: sensor.docker_home_assistant_state
+    status_entity: sensor.home_assistant_state
     control_entity: switch.home_assistant_container
     restart_entity: button.home_assistant_restart_container
+    pause_entity: button.home_assistant_pause_container
+    resume_entity: button.home_assistant_resume_container
     cpu_entity: sensor.home_assistant_cpu_usage
     memory_entity: sensor.home_assistant_memory_usage
-    image_version_entity: sensor.docker_home_assistant_image
+    image_version_entity: sensor.home_assistant_image
     health_entity: sensor.docker_home_assistant_health
     icon: mdi:home-assistant
     tap_action:
       action: more-info
-      entity: sensor.docker_home_assistant_state
+      entity: sensor.home_assistant_state
   - name: ESPHome
-    status_entity: sensor.docker_esphome_state
+    status_entity: sensor.esphome_state
     control_entity: switch.esphome_container
     restart_entity: button.esphome_restart_container
+    pause_entity: button.esphome_pause_container
+    resume_entity: button.esphome_resume_container
     update_entity: sensor.esphome_update_available
     icon: mdi:chip
   - name: Deconz
-    status_entity: sensor.docker_deconz_state
+    status_entity: sensor.deconz_state
     control_entity: switch.deconz_container
     restart_entity: button.deconz_restart_container
+    pause_entity: button.deconz_pause_container
+    resume_entity: button.deconz_resume_container
     cpu_entity: sensor.deconz_cpu_usage
     memory_entity: sensor.deconz_memory_usage
-    image_version_entity: sensor.docker_deconz_image
+    image_version_entity: sensor.deconz_image
     health_entity: sensor.docker_deconz_health
     update_entity: sensor.deconz_update_available
     icon: mdi:zigbee
@@ -156,7 +200,7 @@ containers:
 1. Install the **Portainer** integration via **Settings → Devices & Services → + → Portainer**
 2. Confirm entities such as `sensor.docker_containers_running`, `switch.docker_<container>`, and `button.docker_restart_<container>` exist
 3. Add the YAML snippet above to your dashboard (**Edit Dashboard → Add Card → Manual → paste YAML**)
-4. Optionally adjust `running_color` or `not_running_color` to match your theme
+4. Optionally adjust `running_color`, `not_running_color`, or `paused_color` to match your theme
 
 ---
 
@@ -171,6 +215,7 @@ containers:
 | `columns` | No | `1` | Maximum number of columns — reduces automatically on smaller screens |
 | `running_color` | No | Theme value | Global accent color for running containers |
 | `not_running_color` | No | Theme value | Global accent color for stopped containers |
+| `paused_color` | No | `#f4b942` (amber) | Global accent color for paused containers |
 | `docker_overview` | No | — | High-level Docker host stats |
 | `containers` | **Yes** | — | Array of container definitions |
 
@@ -181,7 +226,8 @@ containers:
 | `status` | Binary sensor for overall Docker daemon state |
 | `container_count` | Total number of containers |
 | `containers_running` | Number of running containers |
-| `containers_stopped` | Number of stopped containers |
+| `containers_paused` | Number of paused containers — enables the expanded `running · paused · stopped` display |
+| `containers_stopped` | Number of stopped containers — enables the expanded `running · paused · stopped` display |
 | `docker_version` | Docker version string |
 | `image_count` | Number of Docker images |
 | `operating_system` | Host OS name |
@@ -195,11 +241,13 @@ containers:
 | --- | --- | --- |
 | `name` | No | Display name (defaults to entity friendly name) |
 | `icon` | No | MDI icon, e.g. `mdi:home-assistant` |
-| `status_entity` | Preferably | Entity whose state represents container status |
+| `status_entity` | Preferably | Entity whose state represents container status — use a `sensor`, not a `binary_sensor`, to get text states like `running`, `paused`, `stopped` |
 | `control_entity` | Conditional | Entity supporting `turn_on`/`turn_off` to start/stop the container |
 | `control_domain` | No | Override domain for `control_entity` |
 | `restart_entity` | No | Entity to trigger a restart (`button`, `switch`, `script`, etc.) |
 | `restart_domain` | No | Override domain for `restart_entity` |
+| `pause_entity` | No | Entity to trigger a pause (`button`, `script`, `automation`) |
+| `resume_entity` | No | Entity to trigger a resume (`button`, `script`, `automation`) |
 | `cpu_entity` | No | Sensor for CPU usage (%) |
 | `memory_entity` | No | Sensor for memory usage (%) |
 | `image_version_entity` | No | Sensor showing the current image tag/version |
@@ -207,14 +255,16 @@ containers:
 | `update_entity` | No | WUD Monitor sensor for update tracking — requires WUD + WUD Monitor integration |
 | `running_color` | No | Per-container override for running accent color |
 | `not_running_color` | No | Per-container override for stopped accent color |
+| `paused_color` | No | Per-container override for paused accent color |
 | `running_states` | No | Custom list of states that count as "running" |
 | `stopped_states` | No | Custom list of states that count as "stopped" |
+| `paused_states` | No | Custom list of states that count as "paused" (default: `["paused", "pause"]`) |
 | `tap_action` | No | Action on row tap (standard Lovelace action object) |
 | `hold_action` | No | Action on long-press |
 | `hold_delay` | No | Hold detection delay in ms (default: `500`) |
 | `switch_entity` | No | Legacy alias for `control_entity` |
 
-> **Tip:** `binary_sensor` entities are read-only. Use `switch`, `input_boolean`, or similar for `control_entity` so the card can call `turn_on`/`turn_off`.
+> **Tip:** `binary_sensor` entities only report `on` or `off` and cannot represent a `paused` state. Always use a `sensor` for `status_entity` if you need pause detection or accurate stopped/running text states.
 
 Color values fall back to Home Assistant theme variables (`var(--state-active-color)`, `var(--state-error-color)`) when omitted. The legacy key `stopped_color` still maps to `not_running_color` for backward compatibility.
 
@@ -222,8 +272,8 @@ Color values fall back to Home Assistant theme variables (`var(--state-active-co
 
 ## Styling
 
-- **Accent colors:** Set `running_color` and `not_running_color` globally or per-container to highlight critical services
-- **Running/Total indicator:** The overview pill turns the not-running color when running count differs from total — handy for spotting issues at a glance
+- **Accent colors:** Set `running_color`, `not_running_color`, and `paused_color` globally or per-container to highlight critical services
+- **Running · Paused · Stopped indicator:** The overview tile automatically switches to a full breakdown when `containers_paused` or `containers_stopped` sensors are configured — handy for spotting issues at a glance
 - **Theme alignment:** The card inherits typography, spacing, and background from your active Home Assistant theme
 
 ---
@@ -283,6 +333,9 @@ shell_command:
 | Entities missing | Check that the Portainer integration is connected and entity IDs match your YAML |
 | Colors not updating | Reload the dashboard after changing color values; check for typos in CSS variables or hex codes |
 | Toggle not working | Ensure `control_entity` uses a supported domain (`switch`, `input_boolean`, etc.) — `binary_sensor` is read-only |
+| Paused state not detected | Use a `sensor` (not `binary_sensor`) for `status_entity`; verify the entity reports `paused` as its state in Developer Tools → States |
+| Pause button missing | The button only appears when the container is running or paused — it is hidden for stopped containers |
+| Pause / Resume not working | Check that `pause_entity` and `resume_entity` point to valid `button.*` entities and that they exist in Developer Tools |
 | Update badge not showing | Verify WUD is running, the WUD Monitor integration is installed, and `update_entity` points to the correct sensor |
 | Scan button not working | Verify the WUD Monitor integration is installed and `wud_scan` points to the correct `button.*` entity |
 
