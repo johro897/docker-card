@@ -1093,9 +1093,9 @@
       return { domain, entity_id: entityId, service: mapping.service };
     }
 
-    _pauseCap(entityId, domainOverride) {
+    _pauseCap(entityId) {
       if (!entityId) return undefined;
-      const domain = domainOverride || domainFromEntityId(entityId);
+      const domain = domainFromEntityId(entityId);
       const mapping = domain ? PAUSE_SERVICE_MAP[domain] : undefined;
       if (!mapping) return undefined;
       return { domain, entity_id: entityId, service: mapping.service };
@@ -1116,8 +1116,7 @@
      * Container config keys:
      *   pause_entity   — button/script entity to press when pausing
      *   resume_entity  — button/script entity to press when resuming
-     *   pause_domain   — optional domain override for pause_entity
-     *   resume_domain  — optional domain override for resume_entity
+
      *   pause_service  — explicit service string/object to call when pausing
      *   resume_service — explicit service string/object to call when resuming
      *
@@ -1128,13 +1127,13 @@
       if (!container) return undefined;
       if (shouldResume) {
         if (container.resume_entity) {
-          const cap = this._pauseCap(container.resume_entity, container.resume_domain);
+          const cap = this._pauseCap(container.resume_entity);
           if (cap) return { domain: cap.domain, service: cap.service, data: { entity_id: cap.entity_id } };
         }
         return this._normalizeSvc(container.resume_service);
       } else {
         if (container.pause_entity) {
-          const cap = this._pauseCap(container.pause_entity, container.pause_domain);
+          const cap = this._pauseCap(container.pause_entity);
           if (cap) return { domain: cap.domain, service: cap.service, data: { entity_id: cap.entity_id } };
         }
         return this._normalizeSvc(container.pause_service);
