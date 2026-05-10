@@ -1116,9 +1116,6 @@
      * Container config keys:
      *   pause_entity   — button/script entity to press when pausing
      *   resume_entity  — button/script entity to press when resuming
-
-     *   pause_service  — explicit service string/object to call when pausing
-     *   resume_service — explicit service string/object to call when resuming
      *
      * @param {object} container
      * @param {boolean} shouldResume  true = get resume service, false = get pause service
@@ -1130,13 +1127,13 @@
           const cap = this._pauseCap(container.resume_entity);
           if (cap) return { domain: cap.domain, service: cap.service, data: { entity_id: cap.entity_id } };
         }
-        return this._normalizeSvc(container.resume_service);
+        return undefined;
       } else {
         if (container.pause_entity) {
           const cap = this._pauseCap(container.pause_entity);
           if (cap) return { domain: cap.domain, service: cap.service, data: { entity_id: cap.entity_id } };
         }
-        return this._normalizeSvc(container.pause_service);
+        return undefined;
       }
     }
 
