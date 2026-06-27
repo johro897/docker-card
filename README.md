@@ -34,12 +34,7 @@ An extended version of Docker Card, inspired by [vineetchoudhary/lovelace-docker
 
 ### 1. Via HACS (recommended)
 
-Installation is easiest via [HACS](https://hacs.xyz/). Once you have HACS set up, follow the [instructions for adding a custom repository](https://hacs.xyz/docs/faq/custom_repositories):
-
-1. In HACS, go to **Frontend → ⋮ → Custom repositories**
-2. Paste `https://github.com/johro897/docker-card-extended` and choose **Dashboard**
-3. Click **Add**, then locate **Docker Card Extended** under **Frontend** and install it
-4. Reload Lovelace resources (or restart Home Assistant)
+Docker Card Extended is available directly in the HACS default catalog. Search for **Docker Card Extended** under **Frontend** in HACS and install it — no custom repository needed.
 
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=johro897&repository=docker-card-extended&category=dashboard)
 
