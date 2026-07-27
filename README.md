@@ -1,45 +1,32 @@
 # Docker Card Extended
-
 An extended version of Docker Card, inspired by [vineetchoudhary/lovelace-docker-card](https://github.com/vineetchoudhary/lovelace-docker-card), that lets you view and control your Docker containers from Home Assistant. When paired with the official Home Assistant Portainer integration, every entity shown below already exists — no templates or shell commands required.
-
 ![](screenshots/Screenshot_4_columns.png)
-
 ## Features
-
 - Compact overview of your Docker host (container counts, Docker version, OS, daemon state)
 - Auto-updating container list with live state badges and control actions
 - Collapsible container section
 - Responsive multi-column layout that adapts to screen size — set `columns: 3` for three columns on wide screens, automatically reduces on smaller screens
 - Per-container icons, health status indicators, and image version display
 - **Pause / Resume support** — pause and resume individual containers directly from the card; paused containers are highlighted in amber and the toggle switch is automatically disabled to prevent invalid state transitions
+- **CPU / Memory sparkline graphs** — opt-in mini history graphs per container, rendered as lightweight inline SVG with data from the Home Assistant history API; no extra dependencies
 - **WUD update tracking** — shows available updates with current → new version and how many days the update has been available (requires a running [What's Up Docker](https://github.com/getwud/wud) instance and the [WUD Monitor](https://github.com/johro897/wud-monitor) HA integration)
 - **WUD overview tiles** — shows last scan time and a one-click Force Scan button directly in the card overview
 - Theme-aware styling with configurable running / paused / not-running accent colors
 - Works out-of-the-box with entities from the Portainer integration; also supports any toggle-friendly domain (`switch`, `input_boolean`, `light`, etc.)
 - Optional tap/hold actions per container row for quick navigation, service calls, or external links
-
 ## Requirements
-
 - Home Assistant 2025.8 or newer
 - Docker managed via the official Portainer integration (provides all referenced sensors, switches, and buttons)
 - **Optional but recommended:** A running [What's Up Docker (WUD)](https://github.com/getwud/wud) instance (tested with WUD 8.2+) with the [WUD Monitor](https://github.com/johro897/wud-monitor) HA integration installed — required for update tracking and scan controls
 - Optional: For non-Portainer environments, equivalent entities (sensors, binary_sensors, switches, scripts, etc.) that expose Docker data and operations
-
 > [!IMPORTANT]
 > This card **does not** fetch Docker data directly. It visualises data exposed through the standard Home Assistant entity model. Example helpers are included below for non-Portainer setups; if you already use the Home Assistant Portainer integration, you can plug its entities directly into the card.
-
 ---
-
 ## Installation
-
 ### 1. Via HACS (recommended)
-
 Docker Card Extended is available directly in the HACS default catalog. Search for **Docker Card Extended** under **Frontend** in HACS and install it — no custom repository needed.
-
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=johro897&repository=docker-card-extended&category=dashboard)
-
 ### 2. Manual install
-
 1. Copy `docker-card.js` to `/config/www/docker-card-extended/docker-card.js`
 2. Add the resource via **Settings → Dashboards → Resources → +**:
    ```yaml
@@ -47,19 +34,13 @@ Docker Card Extended is available directly in the HACS default catalog. Search f
    type: module
    ```
 3. Hard-refresh your browser (`Ctrl/Cmd + Shift + R`)
-
 ---
-
 ## Pause / Resume
-
 Containers can be paused and resumed directly from the card without stopping them. When a container is paused:
-
 - The row border and status text turn **amber**
 - The toggle switch is **disabled** — start/stop is not available while paused
 - The **Pause** button changes to **Resume**
-
 Add `pause_entity` and `resume_entity` to a container pointing to the corresponding Portainer buttons:
-
 ```yaml
 containers:
   - name: Uptime Kuma
@@ -70,33 +51,51 @@ containers:
     restart_entity: button.uptime_kuma_restart_container
     icon: mdi:timeline-plus
 ```
-
 The Pause / Resume button is only shown when the container is **running** or **paused** — it is hidden for stopped containers.
-
 ### Overview — Running · Paused · Stopped
-
 When `containers_paused` and/or `containers_stopped` are configured in `docker_overview`, the running tile expands to show a full breakdown:
-
 ```
 2 running · 1 paused · 3 stopped
 ```
-
 Without those sensors the tile falls back to the compact `running / total` format.
-
 ---
-
+## Resource graphs (CPU / Memory)
+Set `graphs: true` to replace the plain CPU/Memory text with mini sparkline graphs per container. Each graph shows the recent history of the sensor plus the current live value:
+```yaml
+type: custom:docker-card
+graphs: true          # enable for the whole card
+graph_hours: 6        # history window in hours (default: 2)
+graph_height: 34      # graph height in px (default: 34)
+graph_refresh: 300    # seconds between history refetches (default: 300)
+containers:
+  - name: Home Assistant
+    status_entity: sensor.home_assistant_state
+    control_entity: switch.home_assistant_container
+    cpu_entity: sensor.home_assistant_cpu_usage
+    memory_entity: sensor.home_assistant_memory_usage
+  - name: Deconz
+    status_entity: sensor.deconz_state
+    control_entity: switch.deconz_container
+    cpu_entity: sensor.deconz_cpu_usage
+    memory_entity: sensor.deconz_memory_usage
+    graphs: false     # per-container override (both directions work)
+```
+**How it works**
+- History is fetched from the Home Assistant REST history API (`minimal_response`, `no_attributes`) and cached per entity. The card re-renders on every state change in HA, but the API is never called more often than `graph_refresh` (stale-while-revalidate)
+- The current sensor state is always appended as the last point, so the graph never lags behind the displayed value
+- Series are downsampled to at most 120 points per graph to keep the DOM light
+- Graphs are pure inline SVG — no external chart libraries
+**Colors** default to `var(--primary-color)` for CPU and `var(--accent-color)` for Memory. Override globally with `graph_cpu_color` / `graph_memory_color`, or per container with the same keys.
+> [!NOTE]
+> The `cpu_entity` / `memory_entity` sensors must be included in the [recorder](https://www.home-assistant.io/integrations/recorder/) — excluded entities have no history and the graph shows *no history* (the current value is still displayed). With `graphs` omitted or `false`, the card behaves exactly as before.
+---
 ## WUD integration
-
 To use WUD update tracking and scan controls you need:
-
 1. A running [What's Up Docker](https://github.com/getwud/wud) instance (tested with WUD 8.2+)
 2. The [WUD Monitor](https://github.com/johro897/wud-monitor) integration installed in Home Assistant
 3. Each container in WUD labelled with `wud.watch: "true"` in its `docker-compose.yml`
-
 ### Per-container update badge
-
 Add `update_entity` to a container pointing to its WUD Monitor sensor:
-
 ```yaml
 containers:
   - name: ESPHome
@@ -105,15 +104,10 @@ containers:
     update_entity: sensor.esphome_update_available
     icon: mdi:chip
 ```
-
 When an update is available the card shows an inline badge with current → new version and how many days it has been available.
-
 ![](screenshots/screenshot_wud.png)
-
 ### Overview tiles — Last scan & Force Scan
-
 Add `wud_last_poll` and `wud_scan` to `docker_overview` to show the last scan timestamp and a one-click scan button alongside your other overview stats:
-
 ```yaml
 docker_overview:
   containers_running: sensor.docker_containers_running
@@ -121,21 +115,18 @@ docker_overview:
   wud_last_poll: sensor.wud_wud_last_poll
   wud_scan: button.wud_wud_force_scan_all
 ```
-
 Clicking **Scan now** calls `button.press` on the WUD Monitor Force Scan button. The tile shows "Scanning…" for 3 seconds while the action completes.
-
 > [!NOTE]
 > Without the WUD Monitor integration, `update_entity`, `wud_last_poll`, and `wud_scan` have no effect — the rest of the card works normally.
-
 ---
-
 ## Example configuration
-
 ```yaml
 type: custom:docker-card
 title: Docker @ MyServer
 containers_expanded: true
 columns: 3
+graphs: true
+graph_hours: 6
 docker_overview:
   status: binary_sensor.docker_daemon_status
   container_count: sensor.docker_containers_total
@@ -187,22 +178,15 @@ containers:
     update_entity: sensor.deconz_update_available
     icon: mdi:zigbee
 ```
-
 ---
-
 ## Quick start (Portainer integration)
-
 1. Install the **Portainer** integration via **Settings → Devices & Services → + → Portainer**
 2. Confirm entities such as `sensor.docker_containers_running`, `switch.docker_<container>`, and `button.docker_restart_<container>` exist
 3. Add the YAML snippet above to your dashboard (**Edit Dashboard → Add Card → Manual → paste YAML**)
 4. Optionally adjust `running_color`, `not_running_color`, or `paused_color` to match your theme
-
 ---
-
 ## Configuration options
-
 ### Card options
-
 | Option | Required | Default | Description |
 | --- | --- | --- | --- |
 | `title` | No | `Docker Card` | Card header text |
@@ -211,11 +195,15 @@ containers:
 | `running_color` | No | Theme value | Global accent color for running containers |
 | `not_running_color` | No | Theme value | Global accent color for stopped containers |
 | `paused_color` | No | `#f4b942` (amber) | Global accent color for paused containers |
+| `graphs` | No | `false` | Show CPU/Memory history sparklines instead of plain text values |
+| `graph_hours` | No | `2` | History window for graphs, in hours |
+| `graph_height` | No | `34` | Graph height in pixels |
+| `graph_refresh` | No | `300` | Minimum seconds between history refetches per entity |
+| `graph_cpu_color` | No | `var(--primary-color)` | Line/area color for CPU graphs |
+| `graph_memory_color` | No | `var(--accent-color)` | Line/area color for Memory graphs |
 | `docker_overview` | No | — | High-level Docker host stats |
 | `containers` | **Yes** | — | Array of container definitions |
-
 ### docker_overview options
-
 | Option | Description |
 | --- | --- |
 | `status` | Binary sensor for overall Docker daemon state |
@@ -229,9 +217,7 @@ containers:
 | `operating_system_version` | Host OS version |
 | `wud_last_poll` | WUD Monitor sensor — shows timestamp of last WUD scan |
 | `wud_scan` | WUD Monitor button — click to trigger an immediate scan of all containers |
-
 ### Container options
-
 | Option | Required | Description |
 | --- | --- | --- |
 | `name` | No | Display name (defaults to entity friendly name) |
@@ -245,6 +231,9 @@ containers:
 | `resume_entity` | No | Entity to trigger a resume (`button`, `script`, `automation`) |
 | `cpu_entity` | No | Sensor for CPU usage (%) |
 | `memory_entity` | No | Sensor for memory usage (%) |
+| `graphs` | No | Per-container override of the card-level `graphs` setting (`true`/`false`) |
+| `graph_cpu_color` | No | Per-container override for CPU graph color |
+| `graph_memory_color` | No | Per-container override for Memory graph color |
 | `image_version_entity` | No | Sensor showing the current image tag/version |
 | `health_entity` | No | Sensor for container health (`healthy`, `unhealthy`, `starting`) |
 | `update_entity` | No | WUD Monitor sensor for update tracking — requires WUD + WUD Monitor integration |
@@ -258,25 +247,17 @@ containers:
 | `hold_action` | No | Action on long-press |
 | `hold_delay` | No | Hold detection delay in ms (default: `500`) |
 | `switch_entity` | No | Legacy alias for `control_entity` |
-
 > **Tip:** `binary_sensor` entities only report `on` or `off` and cannot represent a `paused` state. Always use a `sensor` for `status_entity` if you need pause detection or accurate stopped/running text states.
-
 Color values fall back to Home Assistant theme variables (`var(--state-active-color)`, `var(--state-error-color)`) when omitted. The legacy key `stopped_color` still maps to `not_running_color` for backward compatibility.
-
 ---
-
 ## Styling
-
 - **Accent colors:** Set `running_color`, `not_running_color`, and `paused_color` globally or per-container to highlight critical services
 - **Running · Paused · Stopped indicator:** The overview tile automatically switches to a full breakdown when `containers_paused` or `containers_stopped` sensors are configured — handy for spotting issues at a glance
+- **Resource graphs:** Tune `graph_height` and the `graph_*_color` options to match your theme; graphs inherit the card background and divider colors automatically
 - **Theme alignment:** The card inherits typography, spacing, and background from your active Home Assistant theme
-
 ---
-
 ## Without Portainer
-
 If you don't use the Portainer integration, you can expose Docker data using `command_line` sensors and `shell_command` helpers:
-
 ```yaml
 sensor:
   - platform: command_line
@@ -295,7 +276,6 @@ sensor:
     name: docker_homeassistant_status
     command: "docker inspect -f '{{.State.Status}}' homeassistant"
     scan_interval: 30
-
 switch:
   - platform: command_line
     switches:
@@ -305,7 +285,6 @@ switch:
         command_off: "docker stop homeassistant"
         command_state: "docker inspect -f '{{.State.Running}}' homeassistant"
         value_template: "{{ value == 'true' or value == 'running' }}"
-
 button:
   - platform: template
     buttons:
@@ -313,15 +292,11 @@ button:
         name: Restart Home Assistant container
         press:
           service: shell_command.docker_restart_homeassistant
-
 shell_command:
   docker_restart_homeassistant: "docker restart homeassistant"
 ```
-
 ---
-
 ## Troubleshooting
-
 | Problem | Solution |
 | --- | --- |
 | Custom card not found | Verify the resource URL is registered and hard-refresh the browser |
@@ -331,15 +306,12 @@ shell_command:
 | Paused state not detected | Use a `sensor` (not `binary_sensor`) for `status_entity`; verify the entity reports `paused` as its state in Developer Tools → States |
 | Pause button missing | The button only appears when the container is running or paused — it is hidden for stopped containers |
 | Pause / Resume not working | Check that `pause_entity` and `resume_entity` point to valid `button.*` entities and that they exist in Developer Tools |
+| Graphs not showing | Set `graphs: true` (card-level or per-container) and make sure the container has `cpu_entity` / `memory_entity` configured |
+| Graph shows "no history" | The sensor is excluded from the recorder or has no recorded data yet — check **Developer Tools → Statistics** / your `recorder:` include/exclude rules |
 | Update badge not showing | Verify WUD is running, the WUD Monitor integration is installed, and `update_entity` points to the correct sensor |
 | Scan button not working | Verify the WUD Monitor integration is installed and `wud_scan` points to the correct `button.*` entity |
-
 ---
-
 ## Development
-
 The distributed bundle is `docker-card.js` — a single self-contained ES2021 JavaScript file. No build tooling required; the file is ready to serve as-is.
-
 ## License
-
 MIT © 2026 — inspired by [vineetchoudhary/lovelace-docker-card](https://github.com/vineetchoudhary/lovelace-docker-card)
