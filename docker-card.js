@@ -174,6 +174,14 @@
         ...nc,
         containers,
       };
+      // Drop cached history when any requested window changes, otherwise a new
+      // graph_hours value would keep drawing the previously cached range until
+      // the graph_refresh TTL expired.
+      const windowKey = [this.config.graph_hours, ...containers.map((c) => c.graph_hours)].join("|");
+      if (this._graphWindowKey !== undefined && this._graphWindowKey !== windowKey) {
+        this._history.clear();
+      }
+      this._graphWindowKey = windowKey;
       if (typeof this.config.containers_expanded === "boolean") {
         this._expanded = this.config.containers_expanded;
       }
@@ -364,6 +372,7 @@
         .dc-row {
           display: flex;
           align-items: flex-start;
+          flex-wrap: wrap;   /* lets .dc-graphs break to its own full-width line */
           gap: 0.6rem 0.75rem;
           padding: 0.75rem 0.85rem;
           border-radius: var(--ha-card-border-radius, 10px);
@@ -433,12 +442,16 @@
         }
         .dc-res-label { font-weight: 500; }
         /* ── Resource graphs (sparklines) ── */
+        /* Rendered as a row-level child (not inside .dc-info) so the graphs
+           span the full card width below the name/status and action buttons. */
         .dc-graphs {
-          display: flex;
-          flex-direction: column;
-          gap: 0.35rem;
-          margin-top: 0.3rem;
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+          gap: 0.4rem;
+          margin-top: 0.5rem;
+          flex: 1 1 100%;
           width: 100%;
+          min-width: 0;
         }
         .dc-graph {
           border-radius: 6px;
@@ -472,6 +485,34 @@
           display: block;
           width: 100%;
           height: ${graphHeight}px;
+        }
+        /* Time axis under each graph */
+        .dc-graph-axis {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-top: 0.1rem;
+          font-size: 0.55rem;
+          line-height: 1;
+          color: var(--secondary-text-color);
+          opacity: 0.8;
+          font-variant-numeric: tabular-nums;
+        }
+        .dc-graph-axis span { white-space: nowrap; }
+        .dc-graph-axis .dc-axis-mid { opacity: 0.75; }
+        /* Day-break variant: labels are pinned to their midnight gridlines */
+        .dc-graph-axis.positioned {
+          display: block;
+          position: relative;
+          height: 0.72rem;
+        }
+        .dc-graph-axis.positioned span { position: absolute; top: 0; }
+        .dc-graph-axis.positioned .dc-axis-start { left: 0; }
+        .dc-graph-axis.positioned .dc-axis-end { right: 0; }
+        .dc-graph-axis.positioned .dc-axis-day {
+          transform: translateX(-50%);
+          font-weight: 600;
+          opacity: 0.9;
         }
         .dc-graph-empty {
           height: ${graphHeight}px;
@@ -782,14 +823,16 @@
      * background when the cache is stale. Points: [[epochMs, number], ...]
      * Stale-while-revalidate: old points are returned while a fetch runs.
      */
-    _historyPoints(entityId) {
+    _historyPoints(entityId, hours, refreshSec) {
       if (!entityId || !this._hass) return undefined;
-      const ttlMs = Math.max(30, parseInt(this.config.graph_refresh) || 300) * 1000;
-      const rec = this._history.get(entityId);
+      const ttlMs = Math.max(30, parseInt(refreshSec) || 300) * 1000;
+      // Cache per entity *and* window, so containers with different
+      // graph_hours don't overwrite each other's data.
+      const cacheKey = `${entityId}|${hours}`;
+      const rec = this._history.get(cacheKey);
       const now = Date.now();
       if (rec && rec.points && now - rec.fetchedAt < ttlMs) return rec.points;
       if (rec && rec.promise) return rec.points; // fetch already underway
-      const hours = Math.max(0.25, parseFloat(this.config.graph_hours) || 2);
       const start = new Date(now - hours * 3600 * 1000).toISOString();
       const url = `history/period/${start}?filter_entity_id=${encodeURIComponent(entityId)}&minimal_response&no_attributes`;
       const promise = this._hass.callApi("GET", url)
@@ -798,15 +841,15 @@
           const points = arr
             .map((p) => [Date.parse(p.last_changed || p.last_updated || p.lu), parseFloat(p.state ?? p.s)])
             .filter(([t, v]) => Number.isFinite(t) && Number.isFinite(v));
-          this._history.set(entityId, { points, fetchedAt: Date.now() });
+          this._history.set(cacheKey, { points, fetchedAt: Date.now() });
           this._scheduleRender();
         })
         .catch((err) => {
           console.warn("docker-card: history fetch failed for", entityId, err);
           // Keep stale points (if any) and back off until next TTL window.
-          this._history.set(entityId, { points: rec?.points || [], fetchedAt: Date.now() });
+          this._history.set(cacheKey, { points: rec?.points || [], fetchedAt: Date.now() });
         });
-      this._history.set(entityId, { points: rec?.points, fetchedAt: rec?.fetchedAt || 0, promise });
+      this._history.set(cacheKey, { points: rec?.points, fetchedAt: rec?.fetchedAt || 0, promise });
       return rec?.points;
     }
     /** Debounced re-render so several resolved history fetches paint once. */
@@ -838,23 +881,118 @@
       const y = (v) => H - ((v - vMin) / (vMax - vMin)) * (H - 3) - 1.5;
       const line = pts.map(([t, v]) => `${x(t).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
       const area = `0,${H} ${line} ${W},${H}`;
+      // Gridlines: one per local midnight when the window spans days,
+      // otherwise a single line at the midpoint to anchor the axis labels.
+      const bounds = this._dayBoundaries(t0, t1);
+      const gridAt = (bounds.length && bounds.length <= 6)
+        ? bounds.map((b) => x(b))
+        : [W / 2];
+      const grid = gridAt.map((gx) => `<line x1="${gx.toFixed(1)}" y1="0" x2="${gx.toFixed(1)}" y2="${H}"
+        stroke="var(--divider-color, rgba(128,128,128,0.35))" stroke-width="1"
+        stroke-dasharray="2 3" vector-effect="non-scaling-stroke" opacity="0.6"></line>`).join("");
       return `<svg class="dc-graph-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
+        ${grid}
         <polygon points="${area}" fill="${color}" opacity="0.12"></polygon>
         <polyline points="${line}" fill="none" stroke="${color}" stroke-width="1.5" vector-effect="non-scaling-stroke"></polyline>
       </svg>`;
     }
+    _locale() {
+      return this._hass?.locale?.language || this._hass?.language || undefined;
+    }
+    /** Formats an epoch-ms timestamp as a short local clock time (HH:MM). */
+    _fmtTime(ms) {
+      try {
+        return new Date(ms).toLocaleTimeString(this._locale(), { hour: "2-digit", minute: "2-digit" });
+      } catch {
+        const d = new Date(ms);
+        return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+      }
+    }
+    /**
+     * Day label for a midnight boundary: weekday for short spans
+     * ("Tue"), day + month once the window grows past a week ("29 Jul").
+     */
+    _fmtDay(ms, spanMs) {
+      const opts = spanMs > 7 * 864e5 ? { day: "numeric", month: "short" } : { weekday: "short" };
+      try {
+        return new Date(ms).toLocaleDateString(this._locale(), opts);
+      } catch {
+        const d = new Date(ms);
+        return `${d.getDate()}/${d.getMonth() + 1}`;
+      }
+    }
+    /** Local midnights strictly between two timestamps. */
+    _dayBoundaries(t0, t1) {
+      const out = [];
+      const d = new Date(t0);
+      d.setHours(24, 0, 0, 0); // next local midnight
+      // Guard against pathological ranges producing an unbounded loop.
+      while (d.getTime() < t1 && out.length < 400) {
+        out.push(d.getTime());
+        d.setDate(d.getDate() + 1);
+      }
+      return out;
+    }
+    /**
+     * Time axis under a sparkline.
+     * When the window spans one or more midnights, day labels are placed at
+     * the day breaks (matching the gridlines); otherwise a plain
+     * start · middle · end clock axis is used.
+     */
+    _axisHtml(points) {
+      if (!points || points.length < 2) return "";
+      const t0 = points[0][0];
+      const t1 = points[points.length - 1][0];
+      const span = Math.max(1, t1 - t0);
+      const bounds = this._dayBoundaries(t0, t1);
+      if (bounds.length && bounds.length <= 6) {
+        // Drop boundaries too close to the edges to avoid overlapping labels.
+        const marks = bounds
+          .map((b) => ({ t: b, pct: ((b - t0) / span) * 100 }))
+          .filter((m) => m.pct > 12 && m.pct < 88);
+        const dayHtml = marks.map((m) =>
+          `<span class="dc-axis-day" style="left:${m.pct.toFixed(2)}%">${this._esc(this._fmtDay(m.t, span))}</span>`
+        ).join("");
+        return `<div class="dc-graph-axis positioned">
+          <span class="dc-axis-start">${this._esc(this._fmtTime(t0))}</span>
+          ${dayHtml}
+          <span class="dc-axis-end">${this._esc(this._fmtTime(t1))}</span>
+        </div>`;
+      }
+      const tm = t0 + span / 2;
+      const fmt = span > 864e5 ? (t) => `${this._fmtDay(t, span)} ${this._fmtTime(t)}` : (t) => this._fmtTime(t);
+      return `<div class="dc-graph-axis">
+        <span>${this._esc(fmt(t0))}</span>
+        <span class="dc-axis-mid">${this._esc(fmt(tm))}</span>
+        <span>${this._esc(fmt(t1))}</span>
+      </div>`;
+    }
     /** Renders the CPU/Memory graph blocks for a container row. */
     _renderResourceGraphs(container, cpuValue, memValue) {
       const blocks = [];
+      // Window / refresh / height may be overridden per container.
+      const pick = (key, fallback, parse) => {
+        const raw = container[key] !== undefined ? container[key] : this.config[key];
+        const n = parse(raw);
+        return Number.isFinite(n) ? n : fallback;
+      };
+      const hours = Math.max(0.25, pick("graph_hours", 2, parseFloat));
+      const refreshSec = Math.max(30, pick("graph_refresh", 300, parseInt));
+      const height = Math.max(16, pick("graph_height", 34, parseInt));
+      // Only emit an inline height when it differs from the card-level CSS.
+      const cardHeight = Math.max(16, parseInt(this.config.graph_height) || 34);
+      const hStyle = height !== cardHeight ? ` style="height:${height}px"` : "";
       const make = (entityId, label, valueText, color) => {
-        let pts = this._historyPoints(entityId);
+        let pts = this._historyPoints(entityId, hours, refreshSec);
         // Append the live state so the graph is always current.
         const e = this._getEntity(entityId);
         const live = e ? parseFloat(e.state) : NaN;
         if (pts && Number.isFinite(live)) pts = pts.concat([[Date.now(), live]]);
-        const body = pts && pts.length >= 2
-          ? this._sparklineSvg(pts, color)
-          : `<div class="dc-graph-empty">${this._t("resources.no_history")}</div>`;
+        const hasData = pts && pts.length >= 2;
+        const body = hasData
+          ? this._sparklineSvg(pts, color).replace("<svg ", `<svg${hStyle} `)
+          : `<div class="dc-graph-empty"${hStyle}>${this._t("resources.no_history")}</div>`;
+        const axis = hasData ? this._axisHtml(pts) : "";
         return `
           <div class="dc-graph">
             <div class="dc-graph-head">
@@ -862,6 +1000,7 @@
               <span class="dc-graph-value">${this._esc(valueText || "—")}</span>
             </div>
             ${body}
+            ${axis}
           </div>`;
       };
       if (container.cpu_entity) {
@@ -909,7 +1048,10 @@
           imageHtml = `<div class="dc-image">${this._t("container.image")}: ${this._esc(iv)}</div>`;
         }
       }
+      // Resource display: either inline text (inside .dc-info) or full-width
+      // graphs rendered as a row-level sibling below the info/actions columns.
       let resHtml = "";
+      let graphHtml = "";
       const cpuE = c.cpu_entity ? this._getEntity(c.cpu_entity) : undefined;
       const memE = c.memory_entity ? this._getEntity(c.memory_entity) : undefined;
       const cpuV = cpuE ? this._fmtPct(cpuE.state) : null;
@@ -917,7 +1059,7 @@
       // graphs: per-container override, falls back to card-level config
       const graphsEnabled = c.graphs !== undefined ? Boolean(c.graphs) : Boolean(this.config.graphs);
       if (graphsEnabled && (c.cpu_entity || c.memory_entity)) {
-        resHtml = this._renderResourceGraphs(c, cpuV, memV);
+        graphHtml = this._renderResourceGraphs(c, cpuV, memV);
       } else if (cpuV || memV) {
         resHtml = `<div class="dc-resources">
           ${cpuV ? `<div class="dc-res-item"><span class="dc-res-label">${this._t("resources.cpu")}:</span><span>${cpuV}</span></div>` : ""}
@@ -968,6 +1110,7 @@
               ${this._t("actions.restart")}
             </button>
           </div>
+          ${graphHtml}
         </div>`;
     }
     // ── Event binding ────────────────────────────────────────────────────────
