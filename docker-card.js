@@ -4,8 +4,8 @@
  * Inspired by vineetchoudhary/lovelace-docker-card but fully re-written
  * Extended with WUD Monitor integration (update_entity, wud_last_poll, wud_scan)
  * Extended with pause/resume support per container and paused count in overview
+ * Extended with optional CPU/Memory sparkline graphs (graphs: true)
  */
-
 (function () {
   const CARD_NAME = "docker-card";
   const CARD_DESCRIPTION = "Modern Docker container overview with start/stop toggles, pause/resume, restart actions and WUD update tracking.";
@@ -41,7 +41,7 @@
       collapse_containers: "Collapse container list",
       expand_containers: "Expand container list",
     },
-    resources: { cpu: "CPU", memory: "Memory" },
+    resources: { cpu: "CPU", memory: "Memory", no_history: "no history" },
     actions: {
       start: "start",
       stop: "stop",
@@ -83,10 +83,8 @@
       days: "d ago",
     },
   };
-
   const TRANSLATION_CACHE = new Map([[DEFAULT_LANGUAGE, DEFAULT_TRANSLATIONS]]);
   const TRANSLATION_PROMISES = new Map();
-
   const MODULE_BASE_URL = (() => {
     if (typeof document === "undefined") return undefined;
     const script = document.currentScript;
@@ -100,14 +98,12 @@
     }
     return undefined;
   })();
-
   if (typeof window !== "undefined") {
     window.customCards = window.customCards || [];
     if (!window.customCards.some((c) => c.type === CARD_NAME)) {
       window.customCards.push({ type: CARD_NAME, name: "Docker Card", description: CARD_DESCRIPTION, preview: false });
     }
   }
-
   const TOGGLE_SERVICE_MAP = {
     switch: { on: "turn_on", off: "turn_off" },
     input_boolean: { on: "turn_on", off: "turn_off" },
@@ -116,14 +112,12 @@
     light: { on: "turn_on", off: "turn_off" },
     fan: { on: "turn_on", off: "turn_off" },
   };
-
   const RESTART_SERVICE_MAP = {
     button: { service: "press" },
     switch: { service: "turn_on" },
     script: { service: "turn_on" },
     automation: { service: "trigger" },
   };
-
   // Pause/unpause entity domains. A button entity press is used for both
   // pause and resume (two separate button entities), or explicit services.
   const PAUSE_SERVICE_MAP = {
@@ -131,13 +125,11 @@
     script: { service: "turn_on" },
     automation: { service: "trigger" },
   };
-
   const domainFromEntityId = (entityId) => {
     if (typeof entityId !== "string") return undefined;
     const i = entityId.indexOf(".");
     return i > 0 ? entityId.slice(0, i) : undefined;
   };
-
   const cryptoRandom = () => {
     if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
     if (typeof crypto !== "undefined" && crypto.getRandomValues) {
@@ -147,9 +139,7 @@
     }
     return `dc_${Date.now()}_${Math.random().toString(16).slice(2)}`;
   };
-
   if (customElements.get(CARD_NAME)) return;
-
   class DockerCard extends HTMLElement {
     constructor() {
       super();
@@ -158,8 +148,10 @@
       this._listId = `dc-list-${cryptoRandom()}`;
       this._columns = 1;
       this._wudScanPending = false;
+      // History cache for sparkline graphs: entityId -> { points, fetchedAt, promise }
+      this._history = new Map();
+      this._renderQueued = false;
     }
-
     setConfig(config) {
       if (!config) throw new Error("Missing configuration for docker-card");
       const nc = { ...config };
@@ -172,9 +164,24 @@
         running_color: "var(--state-active-color, #2e8f57)",
         not_running_color: "var(--state-error-color, #c22040)",
         paused_color: "var(--state-warning-color, #f4b942)",
+        // ── Graph options (opt-in) ──
+        graphs: false,                 // enable CPU/Memory sparklines (card-level default)
+        graph_hours: 2,                // history window in hours
+        graph_height: 34,              // graph height in px
+        graph_refresh: 300,            // seconds between history refetches per entity
+        graph_cpu_color: "var(--primary-color, #03a9f4)",
+        graph_memory_color: "var(--accent-color, #ff9800)",
         ...nc,
         containers,
       };
+      // Drop cached history when any requested window changes, otherwise a new
+      // graph_hours value would keep drawing the previously cached range until
+      // the graph_refresh TTL expired.
+      const windowKey = [this.config.graph_hours, ...containers.map((c) => c.graph_hours)].join("|");
+      if (this._graphWindowKey !== undefined && this._graphWindowKey !== windowKey) {
+        this._history.clear();
+      }
+      this._graphWindowKey = windowKey;
       if (typeof this.config.containers_expanded === "boolean") {
         this._expanded = this.config.containers_expanded;
       }
@@ -184,16 +191,12 @@
       }
       this.render();
     }
-
     connectedCallback() { this.render(); }
-
     set hass(hass) { this._hass = hass; this.render(); }
-
     getCardSize() { return 4; }
-
     // ── CSS ──────────────────────────────────────────────────────────────────
-
     _css() {
+      const graphHeight = Math.max(16, parseInt(this.config?.graph_height) || 34);
       return `
         .dc-card {
           display: block;
@@ -236,7 +239,6 @@
         }
         .dc-pill.actionable { cursor: pointer; }
         .dc-pill.actionable:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
-
         /* ── Overview ── */
         .dc-overview {
           display: grid;
@@ -261,7 +263,6 @@
         }
         .dc-ov-item.actionable:hover { border-color: var(--primary-color); }
         .dc-ov-item.actionable:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
-
         /* WUD scan button tile */
         .dc-ov-item.wud-scan {
           cursor: pointer;
@@ -311,7 +312,6 @@
         .dc-ov-value.running   { color: var(--dc-rc); }
         .dc-ov-value.not-running { color: var(--dc-nrc); }
         .dc-ov-value.wud-action { color: var(--primary-color); font-size: 0.78rem; }
-
         /* Running · Paused · Stopped breakdown */
         .dc-ov-counts {
           display: flex;
@@ -326,7 +326,6 @@
         .dc-ov-count.paused   { color: var(--dc-pc); }
         .dc-ov-count.stopped  { color: var(--dc-nrc); }
         .dc-ov-sep { color: var(--divider-color, rgba(128,128,128,0.5)); font-weight: 400; }
-
         /* ── Section header ── */
         .dc-section-header {
           display: flex;
@@ -363,18 +362,17 @@
         .dc-section.collapsed .dc-section-header { margin-bottom: 0; }
         .dc-section.collapsed .dc-chevron { transform: rotate(-90deg); }
         .dc-section.collapsed .dc-list { display: none; }
-
         /* ── Container list ── */
         .dc-list {
           display: grid;
           grid-template-columns: repeat(var(--dc-max-cols), minmax(0, 1fr));
           gap: 0.5rem;
         }
-
         /* ── Container row ── */
         .dc-row {
           display: flex;
           align-items: flex-start;
+          flex-wrap: wrap;   /* lets .dc-graphs break to its own full-width line */
           gap: 0.6rem 0.75rem;
           padding: 0.75rem 0.85rem;
           border-radius: var(--ha-card-border-radius, 10px);
@@ -391,7 +389,6 @@
         .dc-row.pending  { opacity: 0.6; cursor: progress; }
         .dc-row.actionable { cursor: pointer; }
         .dc-row.actionable:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
-
         .dc-info {
           display: flex;
           flex-direction: column;
@@ -444,7 +441,88 @@
           gap: 0.18rem;
         }
         .dc-res-label { font-weight: 500; }
-
+        /* ── Resource graphs (sparklines) ── */
+        /* Rendered as a row-level child (not inside .dc-info) so the graphs
+           span the full card width below the name/status and action buttons. */
+        .dc-graphs {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+          gap: 0.4rem;
+          margin-top: 0.5rem;
+          flex: 1 1 100%;
+          width: 100%;
+          min-width: 0;
+        }
+        .dc-graph {
+          border-radius: 6px;
+          background: var(--secondary-background-color, rgba(128,128,128,0.06));
+          border: 1px solid var(--divider-color, rgba(128,128,128,0.12));
+          padding: 0.3rem 0.45rem 0.2rem;
+          box-sizing: border-box;
+          min-width: 0;
+        }
+        .dc-graph-head {
+          display: flex;
+          align-items: baseline;
+          justify-content: space-between;
+          gap: 0.4rem;
+          margin-bottom: 0.15rem;
+        }
+        .dc-graph-label {
+          font-size: 0.58rem;
+          font-weight: 600;
+          letter-spacing: 0.07em;
+          text-transform: uppercase;
+          color: var(--secondary-text-color);
+        }
+        .dc-graph-value {
+          font-size: 0.72rem;
+          font-weight: 600;
+          color: var(--primary-text-color);
+          white-space: nowrap;
+        }
+        .dc-graph-svg {
+          display: block;
+          width: 100%;
+          height: ${graphHeight}px;
+        }
+        /* Time axis under each graph */
+        .dc-graph-axis {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-top: 0.1rem;
+          font-size: 0.55rem;
+          line-height: 1;
+          color: var(--secondary-text-color);
+          opacity: 0.8;
+          font-variant-numeric: tabular-nums;
+        }
+        .dc-graph-axis span { white-space: nowrap; }
+        .dc-graph-axis .dc-axis-mid { opacity: 0.75; }
+        /* Day-break variant: labels are pinned to their midnight gridlines */
+        .dc-graph-axis.positioned {
+          display: block;
+          position: relative;
+          height: 0.72rem;
+        }
+        .dc-graph-axis.positioned span { position: absolute; top: 0; }
+        .dc-graph-axis.positioned .dc-axis-start { left: 0; }
+        .dc-graph-axis.positioned .dc-axis-end { right: 0; }
+        .dc-graph-axis.positioned .dc-axis-day {
+          transform: translateX(-50%);
+          font-weight: 600;
+          opacity: 0.9;
+        }
+        .dc-graph-empty {
+          height: ${graphHeight}px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 0.62rem;
+          color: var(--secondary-text-color);
+          opacity: 0.7;
+        }
         /* ── Update badge ── */
         .dc-update {
           display: flex;
@@ -483,7 +561,6 @@
           white-space: nowrap;
           flex-shrink: 0;
         }
-
         .dc-actions {
           display: flex;
           align-items: center;
@@ -506,7 +583,6 @@
         .dc-restart:hover  { border-color: var(--primary-color); color: var(--primary-color); }
         .dc-restart:active { background: var(--primary-color); color: #fff; border-color: var(--primary-color); }
         .dc-restart:disabled { opacity: 0.5; cursor: not-allowed; }
-
         /* Pause / Resume button — amber accent to match paused state */
         .dc-pause {
           border: 1px solid var(--divider-color, rgba(128,128,128,0.3));
@@ -523,9 +599,7 @@
         .dc-pause:hover  { border-color: var(--dc-pc); color: var(--dc-pc); }
         .dc-pause:active { background: var(--dc-pc); color: #fff; border-color: var(--dc-pc); }
         .dc-pause:disabled { opacity: 0.5; cursor: not-allowed; }
-
         ha-switch[disabled] { opacity: 0.5; }
-
         .dc-empty {
           font-size: 0.82rem;
           color: var(--secondary-text-color);
@@ -549,25 +623,19 @@
         }
       `;
     }
-
     // ── Render ───────────────────────────────────────────────────────────────
-
     render() {
       if (!this.config) return;
-
       if (!this._hass) {
         this.innerHTML = `<div class="dc-card"><style>${this._css()}</style><div class="dc-placeholder">${this._t("placeholders.waiting")}</div></div>`;
         return;
       }
-
       const rc = this.config.running_color;
       const nrc = this.config.not_running_color;
       const pc = this.config.paused_color;
       const cols = this._columns;
-
       const status = this._computeOverallStatus();
       const pillClasses = ["dc-pill", status.cssClass, status.tone === "not_running" ? "not-running" : "", status.entityId ? "actionable" : ""].filter(Boolean).join(" ");
-
       this.innerHTML = `
         <div class="dc-card" style="--dc-rc:${rc};--dc-nrc:${nrc};--dc-pc:${pc};--dc-max-cols:${cols}">
           <style>${this._css()}</style>
@@ -582,24 +650,18 @@
           ${this._renderSection()}
         </div>
       `;
-
       this._bindEvents();
     }
-
     // ── Overview ─────────────────────────────────────────────────────────────
-
     _renderOverview() {
       const oc = this.config.docker_overview;
       if (!oc || typeof oc !== "object") return "";
-
       const get = (key) => {
         const id = oc[key];
         const e = id ? this._getEntity(id) : undefined;
         return { entityId: id, state: e?.state };
       };
-
       const items = [];
-
       // Running · Paused · Stopped breakdown
       // Uses containers_running, containers_paused (optional), containers_stopped (optional),
       // and container_count as fallback total.
@@ -607,18 +669,15 @@
       const paused = get("containers_paused");
       const stopped = get("containers_stopped");
       const total = get("container_count");
-
       const rv = this._parseIntState(running.state);
       const pv = this._parseIntState(paused.state);
       const sv = this._parseIntState(stopped.state);
       const tv = this._parseIntState(total.state);
-
       const hasCounts = typeof rv === "number" || typeof pv === "number" || typeof sv === "number";
       if (hasCounts || typeof tv === "number") {
         // Build inline count display: "2 running · 1 paused · 0 stopped"
         // Falls back to "running / total" if only running+total are available (legacy).
         const hasPausedOrStopped = typeof pv === "number" || typeof sv === "number";
-
         let countHtml;
         if (hasPausedOrStopped) {
           const parts = [];
@@ -633,7 +692,6 @@
           const cls = (typeof rv === "number" && typeof tv === "number" && rv !== tv) ? "not-running" : "running";
           countHtml = `<span class="dc-ov-count ${cls}">${rStr} / ${tStr}</span>`;
         }
-
         items.push({
           label: hasPausedOrStopped ? this._t("overview.running_paused_stopped") : this._t("overview.running_total"),
           customValueHtml: `<div class="dc-ov-counts">${countHtml}</div>`,
@@ -642,17 +700,14 @@
           aria: this._t("overview.running_total_aria"),
         });
       }
-
       // Images
       const images = get("image_count");
       const iv = this._fmtState(images.state);
       if (!this._isBlank(iv)) items.push({ label: this._t("overview.images"), value: iv, badge: "IMG", entityId: images.entityId, aria: this._t("overview.images_aria") });
-
       // Docker version
       const docker = get("docker_version");
       const dv = this._fmtState(docker.state);
       if (!this._isBlank(dv)) items.push({ label: this._t("overview.docker"), value: dv, badge: "DOC", entityId: docker.entityId, aria: this._t("overview.docker_aria") });
-
       // OS
       const osn = get("operating_system");
       const osv = get("operating_system_version");
@@ -660,7 +715,6 @@
       const osvl = this._fmtState(osv.state);
       const osVal = osl !== "—" && osvl !== "—" ? `${osl} · ${osvl}` : osl !== "—" ? osl : osvl !== "—" ? osvl : "";
       if (!this._isBlank(osVal)) items.push({ label: this._t("overview.os"), value: osVal, badge: "OS", entityId: osv.entityId || osn.entityId, aria: this._t("overview.os_aria") });
-
       // WUD last poll
       if (oc.wud_last_poll) {
         const e = this._getEntity(oc.wud_last_poll);
@@ -674,9 +728,7 @@
           aria: this._t("overview.wud_last_poll_aria"),
         });
       }
-
       if (!items.length && !oc.wud_scan) return "";
-
       let html = `<div class="dc-overview">`;
       html += items.map((item) => `
         <div class="dc-ov-item${item.entityId ? " actionable" : ""}"
@@ -689,7 +741,6 @@
               : `<div class="dc-ov-value${item.cls ? " " + item.cls : ""}">${this._esc(item.value)}</div>`}
           </div>
         </div>`).join("");
-
       // WUD scan button tile
       if (oc.wud_scan) {
         const scanCls = this._wudScanPending ? " pending" : "";
@@ -707,18 +758,15 @@
             </div>
           </div>`;
       }
-
       html += `</div>`;
       return html;
     }
-
     _renderSection() {
       const expanded = this._expanded;
       const containers = this.config.containers || [];
       const rowsHtml = containers.length
         ? containers.map((c) => this._renderRow(c)).join("")
         : `<div class="dc-empty">${this._t("placeholders.no_containers")}</div>`;
-
       return `
         <div class="dc-section${expanded ? "" : " collapsed"}">
           <button type="button" class="dc-section-header"
@@ -733,33 +781,23 @@
           </div>
         </div>`;
     }
-
     // ── WUD update helpers ────────────────────────────────────────────────────
-
     _getUpdateInfo(container) {
       if (!container.update_entity) return null;
       const entity = this._getEntity(container.update_entity);
       if (!entity) return null;
-
       const updateAvailable = entity.state === "Yes" ||
         entity.attributes?.update_available === true;
-
       if (!updateAvailable) return null;
-
       const currentVersion = entity.attributes?.current_version || null;
       const newVersion = entity.attributes?.new_version || null;
       const daysAvailable = entity.attributes?.days_available ?? null;
-
       if (!newVersion || newVersion === "–") return null;
-
       return { currentVersion, newVersion, daysAvailable };
     }
-
     _renderUpdateBadge(updateInfo) {
       if (!updateInfo) return "";
-
       const { currentVersion, newVersion, daysAvailable } = updateInfo;
-
       let versionHtml = "";
       if (currentVersion && newVersion) {
         versionHtml = `
@@ -769,11 +807,9 @@
       } else if (newVersion) {
         versionHtml = `<span class="dc-update-text">${this._esc(newVersion)}</span>`;
       }
-
       const daysHtml = (daysAvailable !== null && daysAvailable !== undefined)
         ? `<span class="dc-update-days">${daysAvailable}${this._t("update.days")}</span>`
         : "";
-
       return `
         <div class="dc-update">
           <span class="dc-update-dot"></span>
@@ -781,9 +817,204 @@
           ${daysHtml}
         </div>`;
     }
-
+    // ── Resource graph helpers (sparklines) ──────────────────────────────────
+    /**
+     * Returns cached history points for an entity and (re)fetches in the
+     * background when the cache is stale. Points: [[epochMs, number], ...]
+     * Stale-while-revalidate: old points are returned while a fetch runs.
+     */
+    _historyPoints(entityId, hours, refreshSec) {
+      if (!entityId || !this._hass) return undefined;
+      const ttlMs = Math.max(30, parseInt(refreshSec) || 300) * 1000;
+      // Cache per entity *and* window, so containers with different
+      // graph_hours don't overwrite each other's data.
+      const cacheKey = `${entityId}|${hours}`;
+      const rec = this._history.get(cacheKey);
+      const now = Date.now();
+      if (rec && rec.points && now - rec.fetchedAt < ttlMs) return rec.points;
+      if (rec && rec.promise) return rec.points; // fetch already underway
+      const start = new Date(now - hours * 3600 * 1000).toISOString();
+      const url = `history/period/${start}?filter_entity_id=${encodeURIComponent(entityId)}&minimal_response&no_attributes`;
+      const promise = this._hass.callApi("GET", url)
+        .then((resp) => {
+          const arr = Array.isArray(resp) && Array.isArray(resp[0]) ? resp[0] : [];
+          const points = arr
+            .map((p) => [Date.parse(p.last_changed || p.last_updated || p.lu), parseFloat(p.state ?? p.s)])
+            .filter(([t, v]) => Number.isFinite(t) && Number.isFinite(v));
+          this._history.set(cacheKey, { points, fetchedAt: Date.now() });
+          this._scheduleRender();
+        })
+        .catch((err) => {
+          console.warn("docker-card: history fetch failed for", entityId, err);
+          // Keep stale points (if any) and back off until next TTL window.
+          this._history.set(cacheKey, { points: rec?.points || [], fetchedAt: Date.now() });
+        });
+      this._history.set(cacheKey, { points: rec?.points, fetchedAt: rec?.fetchedAt || 0, promise });
+      return rec?.points;
+    }
+    /** Debounced re-render so several resolved history fetches paint once. */
+    _scheduleRender() {
+      if (this._renderQueued) return;
+      this._renderQueued = true;
+      setTimeout(() => { this._renderQueued = false; this.render(); }, 50);
+    }
+    /** Builds an inline SVG sparkline for the given points. */
+    _sparklineSvg(points, color) {
+      const W = 200, H = 40;
+      let pts = points;
+      // Downsample to keep the DOM light.
+      const maxPts = 120;
+      if (pts.length > maxPts) {
+        const step = pts.length / maxPts;
+        const ds = [];
+        for (let i = 0; i < maxPts; i++) ds.push(pts[Math.floor(i * step)]);
+        ds.push(pts[pts.length - 1]);
+        pts = ds;
+      }
+      const t0 = pts[0][0];
+      const t1 = pts[pts.length - 1][0];
+      const span = Math.max(1, t1 - t0);
+      const values = pts.map((p) => p[1]);
+      const vMin = 0;
+      const vMax = Math.max(...values, 0.1) * 1.1;
+      const x = (t) => (((t - t0) / span) * W);
+      const y = (v) => H - ((v - vMin) / (vMax - vMin)) * (H - 3) - 1.5;
+      const line = pts.map(([t, v]) => `${x(t).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+      const area = `0,${H} ${line} ${W},${H}`;
+      // Gridlines: one per local midnight when the window spans days,
+      // otherwise a single line at the midpoint to anchor the axis labels.
+      const bounds = this._dayBoundaries(t0, t1);
+      const gridAt = (bounds.length && bounds.length <= 6)
+        ? bounds.map((b) => x(b))
+        : [W / 2];
+      const grid = gridAt.map((gx) => `<line x1="${gx.toFixed(1)}" y1="0" x2="${gx.toFixed(1)}" y2="${H}"
+        stroke="var(--divider-color, rgba(128,128,128,0.35))" stroke-width="1"
+        stroke-dasharray="2 3" vector-effect="non-scaling-stroke" opacity="0.6"></line>`).join("");
+      return `<svg class="dc-graph-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
+        ${grid}
+        <polygon points="${area}" fill="${color}" opacity="0.12"></polygon>
+        <polyline points="${line}" fill="none" stroke="${color}" stroke-width="1.5" vector-effect="non-scaling-stroke"></polyline>
+      </svg>`;
+    }
+    _locale() {
+      return this._hass?.locale?.language || this._hass?.language || undefined;
+    }
+    /** Formats an epoch-ms timestamp as a short local clock time (HH:MM). */
+    _fmtTime(ms) {
+      try {
+        return new Date(ms).toLocaleTimeString(this._locale(), { hour: "2-digit", minute: "2-digit" });
+      } catch {
+        const d = new Date(ms);
+        return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+      }
+    }
+    /**
+     * Day label for a midnight boundary: weekday for short spans
+     * ("Tue"), day + month once the window grows past a week ("29 Jul").
+     */
+    _fmtDay(ms, spanMs) {
+      const opts = spanMs > 7 * 864e5 ? { day: "numeric", month: "short" } : { weekday: "short" };
+      try {
+        return new Date(ms).toLocaleDateString(this._locale(), opts);
+      } catch {
+        const d = new Date(ms);
+        return `${d.getDate()}/${d.getMonth() + 1}`;
+      }
+    }
+    /** Local midnights strictly between two timestamps. */
+    _dayBoundaries(t0, t1) {
+      const out = [];
+      const d = new Date(t0);
+      d.setHours(24, 0, 0, 0); // next local midnight
+      // Guard against pathological ranges producing an unbounded loop.
+      while (d.getTime() < t1 && out.length < 400) {
+        out.push(d.getTime());
+        d.setDate(d.getDate() + 1);
+      }
+      return out;
+    }
+    /**
+     * Time axis under a sparkline.
+     * When the window spans one or more midnights, day labels are placed at
+     * the day breaks (matching the gridlines); otherwise a plain
+     * start · middle · end clock axis is used.
+     */
+    _axisHtml(points) {
+      if (!points || points.length < 2) return "";
+      const t0 = points[0][0];
+      const t1 = points[points.length - 1][0];
+      const span = Math.max(1, t1 - t0);
+      const bounds = this._dayBoundaries(t0, t1);
+      if (bounds.length && bounds.length <= 6) {
+        // Drop boundaries too close to the edges to avoid overlapping labels.
+        const marks = bounds
+          .map((b) => ({ t: b, pct: ((b - t0) / span) * 100 }))
+          .filter((m) => m.pct > 12 && m.pct < 88);
+        const dayHtml = marks.map((m) =>
+          `<span class="dc-axis-day" style="left:${m.pct.toFixed(2)}%">${this._esc(this._fmtDay(m.t, span))}</span>`
+        ).join("");
+        return `<div class="dc-graph-axis positioned">
+          <span class="dc-axis-start">${this._esc(this._fmtTime(t0))}</span>
+          ${dayHtml}
+          <span class="dc-axis-end">${this._esc(this._fmtTime(t1))}</span>
+        </div>`;
+      }
+      const tm = t0 + span / 2;
+      const fmt = span > 864e5 ? (t) => `${this._fmtDay(t, span)} ${this._fmtTime(t)}` : (t) => this._fmtTime(t);
+      return `<div class="dc-graph-axis">
+        <span>${this._esc(fmt(t0))}</span>
+        <span class="dc-axis-mid">${this._esc(fmt(tm))}</span>
+        <span>${this._esc(fmt(t1))}</span>
+      </div>`;
+    }
+    /** Renders the CPU/Memory graph blocks for a container row. */
+    _renderResourceGraphs(container, cpuValue, memValue) {
+      const blocks = [];
+      // Window / refresh / height may be overridden per container.
+      const pick = (key, fallback, parse) => {
+        const raw = container[key] !== undefined ? container[key] : this.config[key];
+        const n = parse(raw);
+        return Number.isFinite(n) ? n : fallback;
+      };
+      const hours = Math.max(0.25, pick("graph_hours", 2, parseFloat));
+      const refreshSec = Math.max(30, pick("graph_refresh", 300, parseInt));
+      const height = Math.max(16, pick("graph_height", 34, parseInt));
+      // Only emit an inline height when it differs from the card-level CSS.
+      const cardHeight = Math.max(16, parseInt(this.config.graph_height) || 34);
+      const hStyle = height !== cardHeight ? ` style="height:${height}px"` : "";
+      const make = (entityId, label, valueText, color) => {
+        let pts = this._historyPoints(entityId, hours, refreshSec);
+        // Append the live state so the graph is always current.
+        const e = this._getEntity(entityId);
+        const live = e ? parseFloat(e.state) : NaN;
+        if (pts && Number.isFinite(live)) pts = pts.concat([[Date.now(), live]]);
+        const hasData = pts && pts.length >= 2;
+        const body = hasData
+          ? this._sparklineSvg(pts, color).replace("<svg ", `<svg${hStyle} `)
+          : `<div class="dc-graph-empty"${hStyle}>${this._t("resources.no_history")}</div>`;
+        const axis = hasData ? this._axisHtml(pts) : "";
+        return `
+          <div class="dc-graph">
+            <div class="dc-graph-head">
+              <span class="dc-graph-label">${this._esc(label)}</span>
+              <span class="dc-graph-value">${this._esc(valueText || "—")}</span>
+            </div>
+            ${body}
+            ${axis}
+          </div>`;
+      };
+      if (container.cpu_entity) {
+        const color = container.graph_cpu_color || this.config.graph_cpu_color;
+        blocks.push(make(container.cpu_entity, this._t("resources.cpu"), cpuValue, color));
+      }
+      if (container.memory_entity) {
+        const color = container.graph_memory_color || this.config.graph_memory_color;
+        blocks.push(make(container.memory_entity, this._t("resources.memory"), memValue, color));
+      }
+      if (!blocks.length) return "";
+      return `<div class="dc-graphs">${blocks.join("")}</div>`;
+    }
     // ── Row render ────────────────────────────────────────────────────────────
-
     _renderRow(c) {
       const key = this._containerKey(c);
       const si = this._containerStatus(c);
@@ -792,11 +1023,9 @@
       const nrc = c.not_running_color || c.stopped_color || this.config.not_running_color;
       const pc = c.paused_color || this.config.paused_color;
       const name = this._esc(c.name || this._friendlyName(c.status_entity || c.switch_entity));
-
       const iconHtml = c.icon
         ? `<ha-icon icon="${this._esc(c.icon)}" style="--mdc-icon-size:0.95rem;flex-shrink:0"></ha-icon>`
         : "";
-
       let healthHtml = "";
       if (c.health_entity) {
         const he = this._getEntity(c.health_entity);
@@ -811,7 +1040,6 @@
           healthHtml = `<ha-icon icon="${cfg.icon}" style="--mdc-icon-size:0.85rem;color:${cfg.color};flex-shrink:0"></ha-icon>`;
         }
       }
-
       let imageHtml = "";
       if (c.image_version_entity) {
         const ie = this._getEntity(c.image_version_entity);
@@ -820,33 +1048,35 @@
           imageHtml = `<div class="dc-image">${this._t("container.image")}: ${this._esc(iv)}</div>`;
         }
       }
-
+      // Resource display: either inline text (inside .dc-info) or full-width
+      // graphs rendered as a row-level sibling below the info/actions columns.
       let resHtml = "";
+      let graphHtml = "";
       const cpuE = c.cpu_entity ? this._getEntity(c.cpu_entity) : undefined;
       const memE = c.memory_entity ? this._getEntity(c.memory_entity) : undefined;
       const cpuV = cpuE ? this._fmtPct(cpuE.state) : null;
       const memV = memE ? this._fmtPct(memE.state) : null;
-      if (cpuV || memV) {
+      // graphs: per-container override, falls back to card-level config
+      const graphsEnabled = c.graphs !== undefined ? Boolean(c.graphs) : Boolean(this.config.graphs);
+      if (graphsEnabled && (c.cpu_entity || c.memory_entity)) {
+        graphHtml = this._renderResourceGraphs(c, cpuV, memV);
+      } else if (cpuV || memV) {
         resHtml = `<div class="dc-resources">
           ${cpuV ? `<div class="dc-res-item"><span class="dc-res-label">${this._t("resources.cpu")}:</span><span>${cpuV}</span></div>` : ""}
           ${memV ? `<div class="dc-res-item"><span class="dc-res-label">${this._t("resources.memory")}:</span><span>${memV}</span></div>` : ""}
         </div>`;
       }
-
       const updateInfo = this._getUpdateInfo(c);
       const updateHtml = this._renderUpdateBadge(updateInfo);
-
       const tapAction = this._normalizeAction(c.tap_action);
       const holdAction = this._normalizeAction(c.hold_action);
       const isActionable = (tapAction?.action && tapAction.action !== "none") || (holdAction?.action && holdAction.action !== "none");
-
       // Pause button label: show "Resume" when paused, "Pause" when running.
       // Hidden entirely when container is stopped/unknown.
       const showPauseBtn = si.isRunning || si.isPaused;
       const pauseBtnLabel = si.isPaused ? this._t("actions.resume") : this._t("actions.pause");
       const pauseBtnTitle = si.isPaused ? this._t("actions.resume_container") : this._t("actions.pause_container");
       const pauseBtnDisabled = !si.canPause || pending;
-
       const pauseBtnHtml = showPauseBtn
         ? `<button class="dc-pause" data-key="${key}" data-pause-action="${si.isPaused ? "resume" : "pause"}"
             ${pauseBtnDisabled ? "disabled" : ""}
@@ -854,7 +1084,6 @@
             ${pauseBtnLabel}
            </button>`
         : "";
-
       return `
         <div class="dc-row ${si.cssClass}${pending ? " pending" : ""}${isActionable ? " actionable" : ""}"
           data-key="${key}"
@@ -881,17 +1110,15 @@
               ${this._t("actions.restart")}
             </button>
           </div>
+          ${graphHtml}
         </div>`;
     }
-
     // ── Event binding ────────────────────────────────────────────────────────
-
     _bindEvents() {
       this.querySelector(".dc-section-header")?.addEventListener("click", () => {
         this._expanded = !this._expanded;
         this.render();
       });
-
       this.querySelectorAll("[data-more-info]").forEach((el) => {
         const entityId = el.dataset.moreInfo;
         if (!entityId) return;
@@ -900,7 +1127,6 @@
           if (e.key === "Enter" || e.key === " ") { e.preventDefault(); this._showMoreInfo(entityId); }
         });
       });
-
       // WUD scan button
       this.querySelectorAll("[data-wud-scan]").forEach((el) => {
         const entityId = el.dataset.wudScan;
@@ -923,7 +1149,6 @@
           if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handler(); }
         });
       });
-
       this.querySelectorAll("ha-switch[data-key]").forEach((sw) => {
         sw.addEventListener("change", (e) => {
           e.stopPropagation();
@@ -932,7 +1157,6 @@
           if (c) this._handleToggle(c, sw.checked, sw);
         });
       });
-
       this.querySelectorAll(".dc-restart[data-key]").forEach((btn) => {
         btn.addEventListener("click", (e) => {
           e.stopPropagation();
@@ -940,7 +1164,6 @@
           if (c) this._handleRestart(c, btn);
         });
       });
-
       // Pause / Resume buttons
       this.querySelectorAll(".dc-pause[data-key]").forEach((btn) => {
         btn.addEventListener("click", (e) => {
@@ -950,7 +1173,6 @@
           if (c) this._handlePause(c, action === "resume", btn);
         });
       });
-
       this.querySelectorAll(".dc-row.actionable[data-key]").forEach((row) => {
         const c = this._findContainer(row.dataset.key);
         if (!c) return;
@@ -982,20 +1204,16 @@
         });
       });
     }
-
     // ── Helpers ──────────────────────────────────────────────────────────────
-
     _findContainer(key) {
       return (this.config.containers || []).find((c) => this._containerKey(c) === key);
     }
-
     _isInteractive(event) {
       if (!event?.target) return false;
       const t = event.target;
       if (t.closest(".dc-actions")) return true;
       return ["button", "a", "input", "select", "textarea", "ha-switch"].some((s) => t.closest(s));
     }
-
     _containerKey(container) {
       if (container.id) return container.id;
       if (!container.__dcKey) {
@@ -1004,7 +1222,6 @@
       }
       return container.__dcKey;
     }
-
     _normalizeContainers(input) {
       if (!input) return [];
       const result = [];
@@ -1024,9 +1241,7 @@
       }
       return result;
     }
-
     // ── Status ───────────────────────────────────────────────────────────────
-
     _containerStatus(container) {
       const stateEntityId = container.status_entity || container.control_entity || container.switch_entity;
       const entity = stateEntityId ? this._getEntity(stateEntityId) : undefined;
@@ -1047,7 +1262,6 @@
       const canPause = Boolean(this._getPauseService(container, false) || this._getPauseService(container, true));
       return { entityId: stateEntityId, rawState, label, cssClass, isRunning, isStopped, isPaused, canToggle, canRestart, canPause };
     }
-
     _computeOverallStatus() {
       const entityId = this.config.docker_overview?.status;
       const entity = entityId ? this._getEntity(entityId) : undefined;
@@ -1060,7 +1274,6 @@
       if (trans[v]) return { label: this._t(trans[v]), cssClass: "idle", tone: "idle", entityId };
       return { label: rawState, cssClass: "idle", tone: "idle", entityId };
     }
-
     _prettyStatus(state, opts = {}) {
       if (!state) return this._t("status.unknown");
       const v = state.toLowerCase();
@@ -1074,9 +1287,7 @@
       if (trans[v]) return this._t(trans[v]);
       return state.charAt(0).toUpperCase() + state.slice(1);
     }
-
     // ── Services ─────────────────────────────────────────────────────────────
-
     _toggleCap(entityId, domainOverride) {
       if (!entityId) return undefined;
       const domain = domainOverride || domainFromEntityId(entityId);
@@ -1084,7 +1295,6 @@
       if (!mapping) return undefined;
       return { domain, entity_id: entityId, on: mapping.on, off: mapping.off };
     }
-
     _restartCap(entityId, domainOverride) {
       if (!entityId) return undefined;
       const domain = domainOverride || domainFromEntityId(entityId);
@@ -1092,7 +1302,6 @@
       if (!mapping) return undefined;
       return { domain, entity_id: entityId, service: mapping.service };
     }
-
     _pauseCap(entityId) {
       if (!entityId) return undefined;
       const domain = domainFromEntityId(entityId);
@@ -1100,7 +1309,6 @@
       if (!mapping) return undefined;
       return { domain, entity_id: entityId, service: mapping.service };
     }
-
     _getRestartService(container) {
       if (!container) return undefined;
       if (container.restart_entity) {
@@ -1109,7 +1317,6 @@
       }
       return this._normalizeSvc(container.restart_service);
     }
-
     /**
      * Returns the service config for pause or resume.
      *
@@ -1136,7 +1343,6 @@
         return undefined;
       }
     }
-
     _resolveToggleService(container, shouldRun) {
       const controlEntityId = container.control_entity || container.switch_entity;
       const cap = this._toggleCap(controlEntityId, container.control_domain || container.switch_domain);
@@ -1146,7 +1352,6 @@
       }
       return this._normalizeSvc(shouldRun ? container.start_service : container.stop_service);
     }
-
     _normalizeSvc(service) {
       if (!service) return undefined;
       if (typeof service === "string") {
@@ -1161,14 +1366,11 @@
       if (target && !payload.target) payload.target = target;
       return { domain, service: srv, data: payload };
     }
-
     async _callService(service) {
       if (!this._hass) throw new Error("Home Assistant unavailable");
       return this._hass.callService(service.domain, service.service, service.data || {});
     }
-
     // ── Toggle / Restart / Pause ─────────────────────────────────────────────
-
     async _handleToggle(container, shouldRun, toggleEl) {
       const key = this._containerKey(container);
       const displayName = container.name || this._friendlyName(container.status_entity || container.switch_entity);
@@ -1195,7 +1397,6 @@
         this.render();
       }
     }
-
     async _handleRestart(container, buttonEl) {
       const svcConfig = this._getRestartService(container);
       const displayName = container.name || this._friendlyName(container.restart_entity || container.status_entity);
@@ -1219,7 +1420,6 @@
         this.render();
       }
     }
-
     async _handlePause(container, shouldResume, buttonEl) {
       const displayName = container.name || this._friendlyName(container.status_entity);
       const svcConfig = this._getPauseService(container, shouldResume);
@@ -1249,9 +1449,7 @@
         this.render();
       }
     }
-
     // ── Actions ──────────────────────────────────────────────────────────────
-
     _normalizeAction(action) {
       if (!action) return undefined;
       if (typeof action === "string") return { action };
@@ -1264,7 +1462,6 @@
       }
       return { ...action };
     }
-
     _handleAction(actionConfig, defaultEntity) {
       const config = this._normalizeAction(actionConfig);
       if (!config || config.action === "none") return;
@@ -1306,36 +1503,28 @@
           break;
       }
     }
-
     // ── HA helpers ────────────────────────────────────────────────────────────
-
     _getEntity(entityId) {
       if (!entityId || !this._hass?.states) return undefined;
       return this._hass.states[entityId];
     }
-
     _friendlyName(entityId) {
       const e = this._getEntity(entityId);
       return e?.attributes?.friendly_name || entityId || this._t("common.container");
     }
-
     _showMoreInfo(entityId) {
       if (!entityId) return;
       this.dispatchEvent(new CustomEvent("hass-more-info", { bubbles: true, composed: true, detail: { entityId } }));
     }
-
     _notify(message) {
       if (!message) return;
       this.dispatchEvent(new CustomEvent("hass-notification", { detail: { message }, bubbles: true, composed: true }));
     }
-
     // ── Formatting ────────────────────────────────────────────────────────────
-
     _fmtState(state) {
       if (state === undefined || state === null || state === "unknown" || state === "unavailable") return "—";
       return state;
     }
-
     _fmtPct(value) {
       if (value === undefined || value === null) return null;
       const s = value.toString().toLowerCase();
@@ -1344,7 +1533,6 @@
       if (isNaN(n)) return null;
       return `${n.toFixed(1)}%`;
     }
-
     _parseIntState(state) {
       if (state === undefined || state === null) return undefined;
       const s = state.toString().trim();
@@ -1354,7 +1542,6 @@
       if (m) { const c = Number(m[0]); if (Number.isInteger(c)) return c; }
       return undefined;
     }
-
     _isBlank(value) {
       if (value === undefined || value === null) return true;
       const s = value.toString().trim();
@@ -1362,7 +1549,6 @@
       if (/^(unknown|unavailable)$/i.test(s)) return true;
       return s.replace(/[—\s/·]/g, "").length === 0;
     }
-
     _esc(str) {
       if (!str) return "";
       return String(str)
@@ -1371,9 +1557,7 @@
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;");
     }
-
     // ── Translations ──────────────────────────────────────────────────────────
-
     _t(key, replacements) {
       if (!key) return "";
       const language = this._hass?.selectedLanguage || this._hass?.language || DEFAULT_LANGUAGE;
@@ -1385,13 +1569,11 @@
         Object.prototype.hasOwnProperty.call(replacements, k) ? replacements[k] : match
       );
     }
-
     _getValue(tree, key) {
       if (!tree || !key) return undefined;
       return key.split(".").reduce((acc, seg) =>
         acc && Object.prototype.hasOwnProperty.call(acc, seg) ? acc[seg] : undefined, tree);
     }
-
     _maybeLoadTranslations(language) {
       if (!language || language === DEFAULT_LANGUAGE) return;
       if (TRANSLATION_CACHE.has(language) || TRANSLATION_PROMISES.has(language)) return;
@@ -1406,6 +1588,5 @@
       TRANSLATION_PROMISES.set(language, p);
     }
   }
-
   customElements.define(CARD_NAME, DockerCard);
 })();
