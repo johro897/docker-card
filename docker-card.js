@@ -1054,8 +1054,8 @@
       let graphHtml = "";
       const cpuE = c.cpu_entity ? this._getEntity(c.cpu_entity) : undefined;
       const memE = c.memory_entity ? this._getEntity(c.memory_entity) : undefined;
-      const cpuV = cpuE ? this._fmtPct(cpuE.state) : null;
-      const memV = memE ? this._fmtPct(memE.state) : null;
+      const cpuV = cpuE ? this._fmtResourceValue(cpuE) : null;
+      const memV = memE ? this._fmtResourceValue(memE) : null;
       // graphs: per-container override, falls back to card-level config
       const graphsEnabled = c.graphs !== undefined ? Boolean(c.graphs) : Boolean(this.config.graphs);
       if (graphsEnabled && (c.cpu_entity || c.memory_entity)) {
@@ -1525,13 +1525,22 @@
       if (state === undefined || state === null || state === "unknown" || state === "unavailable") return "—";
       return state;
     }
-    _fmtPct(value) {
+    /**
+     * Formats a CPU/memory entity's state using its own unit_of_measurement
+     * (falls back to "%" for entities that don't declare one) — so absolute
+     * sensors like memory in MB display correctly instead of being shown as
+     * a percentage.
+     */
+    _fmtResourceValue(entity) {
+      if (!entity) return null;
+      const value = entity.state;
       if (value === undefined || value === null) return null;
       const s = value.toString().toLowerCase();
       if (s === "unknown" || s === "unavailable" || s === "") return null;
       const n = parseFloat(value);
       if (isNaN(n)) return null;
-      return `${n.toFixed(1)}%`;
+      const unit = entity.attributes?.unit_of_measurement ?? "%";
+      return unit === "%" ? `${n.toFixed(1)}%` : `${n.toFixed(1)} ${unit}`;
     }
     _parseIntState(state) {
       if (state === undefined || state === null) return undefined;

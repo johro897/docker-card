@@ -133,8 +133,8 @@ This walks through the minimum needed to see one real container on the card. It 
 | `restart_domain` | No | Override domain for `restart_entity` |
 | `pause_entity` | No | Entity to trigger a pause (`button`, `script`, `automation`) |
 | `resume_entity` | No | Entity to trigger a resume (`button`, `script`, `automation`) |
-| `cpu_entity` | No | Sensor for CPU usage (%) |
-| `memory_entity` | No | Sensor for memory usage (%) |
+| `cpu_entity` | No | Sensor for CPU usage. Displayed in whatever unit the sensor itself declares (`%` if none is set) |
+| `memory_entity` | No | Sensor for memory usage — percentage or an absolute unit like `MB`/`GB`. Displayed in whatever unit the sensor itself declares (`%` if none is set) |
 | `graphs` | No | Per-container override of the card-level `graphs` setting (`true`/`false`) |
 | `graph_hours` | No | Per-container history window in hours |
 | `graph_height` | No | Per-container graph height in pixels |
@@ -394,6 +394,12 @@ shell_command:
 | Scan button not working | Verify the WUD Monitor integration is installed and `wud_scan` points to the correct `button.*` entity |
 
 ## Changelog
+
+### 3.5
+**Fix: `cpu_entity` / `memory_entity` now respect their own unit** — requested in #6
+- Values and graph labels now use the sensor's own `unit_of_measurement` (e.g. `MB`, `GB`) instead of always appending `%`
+- Falls back to `%` for sensors that don't declare a unit — no change for existing percentage-based setups
+- The graphs themselves were already unit-agnostic (auto-scaled to the actual data); only the text label was hardcoded
 
 ### 3.4
 **Resource graphs (CPU / Memory)** — requested in #3
