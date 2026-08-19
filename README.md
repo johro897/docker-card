@@ -401,7 +401,7 @@ shell_command:
 
 ## Changelog
 
-### 3.5
+### 3.7
 **Release notes link and WUD check-failed indicator** — requested in #10, tracked in #11
 - Update badge now shows a small link icon to the release notes when the container has a `wud.link.template` label configured in WUD (requires WUD Monitor 2.2+)
 - The same badge slot shows WUD's own reported error (registry rate limit, auth failure, etc.) in red when WUD fails to check a container, instead of staying silent about it
