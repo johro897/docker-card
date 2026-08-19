@@ -31,7 +31,8 @@ An extended version of Docker Card, inspired by [vineetchoudhary/lovelace-docker
 - **Pause / Resume support** — pause and resume individual containers directly from the card; paused containers are highlighted in amber and the toggle switch is automatically disabled to prevent invalid state transitions
 - **Recreate container** — pull-and-recreate a container via Portainer's own button entity, with an "are you sure?" step first
 - **CPU / Memory sparkline graphs** — opt-in full-width history graphs per container with an adaptive time axis and day breaks, rendered as lightweight inline SVG from the Home Assistant history API; no extra dependencies
-- **WUD update tracking** — shows available updates with current → new version and how many days the update has been available (requires a running [What's Up Docker](https://github.com/getwud/wud) instance and the [WUD Monitor](https://github.com/johro897/wud-monitor) HA integration)
+- **WUD update tracking** — shows available updates with current → new version, how many days it's been available, and an optional release notes link (requires a running [What's Up Docker](https://github.com/getwud/wud) instance and the [WUD Monitor](https://github.com/johro897/wud-monitor) HA integration)
+- **WUD check-failed indicator** — surfaces WUD's own reported error for a container (registry rate limit, auth failure) directly in the card instead of failing silently (requires WUD Monitor 2.2+)
 - **WUD overview tiles** — shows last scan time and a one-click Force Scan button directly in the card overview
 - **Prune unused images** — one-click prune of unused Docker images via Portainer's own button entity, with an inline confirmation step before it runs
 - **Disk usage overview tiles** — container, image, and volume disk usage from Portainer, shown in whatever unit the sensor reports
@@ -280,6 +281,9 @@ When an update is available the card shows an inline badge with current → new 
 
 ![](screenshots/screenshot_wud.png)
 
+> [!NOTE]
+> **Requires WUD Monitor 2.2+:** if the container has a `wud.link.template` label configured in WUD (see [WUD Monitor's README](https://github.com/johro897/wud-monitor#wud-container-labels)), a small link icon appears in the badge linking to the release notes. And if WUD itself fails to check a container — a registry rate limit, an auth failure — the same badge slot shows that error in red instead of staying silent about it. Both are read from the `update_entity` sensor's `release_notes` and `error` attributes; on older WUD Monitor versions neither attribute exists and the badge renders exactly as before.
+
 ### Overview tiles — Last scan & Force Scan
 Add `wud_last_poll` and `wud_scan` to `docker_overview` to show the last scan timestamp and a one-click scan button alongside your other overview stats:
 ```yaml
@@ -438,6 +442,8 @@ shell_command:
 | Graph shorter than `graph_hours` | The recorder has no older data for that sensor. Check `purge_keep_days` and your `recorder:` filters, and compare with the sensor's own history panel — if HA can't show the range, the card can't either |
 | Changed `graph_hours`, nothing happened | Hard-refresh the browser (`Ctrl/Cmd + Shift + R`). Also verify the option sits where you intended: on the card for a global default, or inside a container entry to override just that one |
 | Update badge not showing | Verify WUD is running, the WUD Monitor integration is installed, and `update_entity` points to the correct sensor |
+| Release notes link not showing | Requires WUD Monitor 2.2+, an update currently available, and a `wud.link.template` label configured on that container in WUD — see [WUD Monitor's README](https://github.com/johro897/wud-monitor#wud-container-labels) |
+| Update badge shows a red error instead of a version | WUD itself failed to check that container (registry rate limit, auth failure, etc.) — this is WUD Monitor's `error` attribute, not a card issue. Check WUD's own logs/UI for the underlying cause |
 | Scan button not working | Verify the WUD Monitor integration is installed and `wud_scan` points to the correct `button.*` entity |
 | Prune button not working | Verify `prune_images` points to a valid Portainer `button.*_prune_images` entity and that the Portainer integration is connected |
 | Pruning runs but tagged images stay behind | Known Portainer integration bug, not a card bug — see the warning in [Prune unused images](#prune-unused-images) ([home-assistant/core#179542](https://github.com/home-assistant/core/issues/179542)) |
@@ -457,6 +463,7 @@ shell_command:
 - New `docker_overview.prune_images` option — Portainer's own prune-images button, exposed in the overview
 - Shares one tile with `wud_scan` when both are configured; renders alone otherwise
 - Asks for confirmation inline before running, since it's a destructive action
+- Known limitation: a Portainer integration bug can leave tagged-but-unused images behind after pruning — not fixable on the card's side, see the warning in [Prune unused images](#prune-unused-images)
 
 **Recreate container** — requested in #8
 - New `recreate_entity` container option — pulls and recreates via Portainer's own button entity
@@ -466,6 +473,11 @@ shell_command:
 **Disk usage overview tiles** — requested in #9
 - New `container_disk_usage`, `image_disk_usage`, `volume_disk_usage` options in `docker_overview`
 - Displayed in whatever unit the sensor reports (e.g. `GB`)
+
+**Release notes link and WUD check-failed indicator** — requested in #10, tracked in #11
+- Update badge now shows a small link icon to the release notes when the container has a `wud.link.template` label configured in WUD (requires WUD Monitor 2.2+)
+- The same badge slot shows WUD's own reported error (registry rate limit, auth failure, etc.) in red when WUD fails to check a container, instead of staying silent about it
+- Both read new attributes (`release_notes`, `error`) on the existing `update_entity` sensor — no new config option, and no change in behavior on older WUD Monitor versions
 
 ### 3.4
 **Resource graphs (CPU / Memory)** — requested in #3
