@@ -59,6 +59,12 @@
       stop_container: "Stop container",
       pause_container: "Pause container",
       resume_container: "Resume container",
+      recreate: "Recreate",
+      recreate_container: "Recreate container",
+      recreate_confirm_text: "Recreate container?",
+      recreating: "Recreating…",
+      confirm: "Confirm",
+      cancel: "Cancel",
     },
     notifications: {
       starting: "Starting {name}…",
@@ -75,6 +81,9 @@
       missing_restart: "No restart service configured for {name}.",
       missing_pause: "No pause service configured for {name}.",
       missing_resume: "No resume service configured for {name}.",
+      missing_recreate: "No recreate service configured for {name}.",
+      recreating: "Recreating {name}…",
+      failed_recreate: "Failed to recreate {name}.",
       wud_scan_triggered: "WUD scan triggered.",
       wud_scan_failed: "WUD scan failed.",
       prune_triggered: "Prune started.",
@@ -134,6 +143,11 @@
     script: { service: "turn_on" },
     automation: { service: "trigger" },
   };
+  const RECREATE_SERVICE_MAP = {
+    button: { service: "press" },
+    script: { service: "turn_on" },
+    automation: { service: "trigger" },
+  };
   const domainFromEntityId = (entityId) => {
     if (typeof entityId !== "string") return undefined;
     const i = entityId.indexOf(".");
@@ -159,6 +173,7 @@
       this._wudScanPending = false;
       this._pruneConfirming = false;
       this._prunePending = false;
+      this._recreateConfirming = new Set(); // container keys currently showing the recreate confirm step
       // History cache for sparkline graphs: entityId -> { points, fetchedAt, promise }
       this._history = new Map();
       this._renderQueued = false;
@@ -644,6 +659,17 @@
         .dc-pause:hover  { border-color: var(--dc-pc); color: var(--dc-pc); }
         .dc-pause:active { background: var(--dc-pc); color: #fff; border-color: var(--dc-pc); }
         .dc-pause:disabled { opacity: 0.5; cursor: not-allowed; }
+        /* Recreate button — teal-ish accent, distinct from the neutral Restart/Pause pills */
+        .dc-recreate {
+          border: 1px solid rgba(46,143,87,0.4);
+          background: rgba(46,143,87,0.08);
+          color: var(--dc-rc, #2e8f57);
+          font: inherit; font-size: 0.75rem; border-radius: 999px;
+          padding: 0.28rem 0.75rem; cursor: pointer; white-space: nowrap;
+          transition: background 0.15s ease, border-color 0.15s ease;
+        }
+        .dc-recreate:hover { background: rgba(46,143,87,0.16); }
+        .dc-recreate:disabled { opacity: 0.5; cursor: not-allowed; }
         ha-switch[disabled] { opacity: 0.5; }
         .dc-empty {
           font-size: 0.82rem;
@@ -1180,6 +1206,26 @@
             ${pauseBtnLabel}
            </button>`
         : "";
+      // Recreate button: idle → inline "are you sure?" confirm → pending.
+      // Hidden entirely when no recreate_entity is configured.
+      const recreateConfirming = this._recreateConfirming.has(key);
+      let recreateHtml = "";
+      if (si.canRecreate) {
+        if (recreateConfirming) {
+          recreateHtml = `
+            <span class="dc-confirm-row">
+              <span class="dc-confirm-text">${this._t("actions.recreate_confirm_text")}</span>
+              <button class="dc-confirm-btn yes" data-recreate-confirm="${key}">${this._t("actions.confirm")}</button>
+              <button class="dc-confirm-btn no" data-recreate-cancel="${key}">${this._t("actions.cancel")}</button>
+            </span>`;
+        } else {
+          recreateHtml = `
+            <button class="dc-recreate" data-recreate-arm="${key}" ${pending ? "disabled" : ""}
+              title="${this._t("actions.recreate_container")}">
+              ${pending && this._pending.get(key) === "recreate" ? this._t("actions.recreating") : this._t("actions.recreate")}
+            </button>`;
+        }
+      }
       return `
         <div class="dc-row ${si.cssClass}${pending ? " pending" : ""}${isActionable ? " actionable" : ""}"
           data-key="${key}"
@@ -1205,6 +1251,7 @@
             <button class="dc-restart" data-key="${key}" ${!si.canRestart || pending ? "disabled" : ""}>
               ${this._t("actions.restart")}
             </button>
+            ${recreateHtml}
           </div>
           ${graphHtml}
         </div>`;
@@ -1272,6 +1319,23 @@
         } finally {
           setTimeout(() => { this._prunePending = false; this.render(); }, 3000);
         }
+      });
+      // Recreate container — same arm / cancel / confirm pattern as Prune, keyed per container.
+      this.querySelectorAll("[data-recreate-arm]").forEach((el) => {
+        const key = el.dataset.recreateArm;
+        const arm = () => { this._recreateConfirming.add(key); this.render(); };
+        el.addEventListener("click", arm);
+      });
+      this.querySelectorAll("[data-recreate-cancel]").forEach((el) => {
+        const key = el.dataset.recreateCancel;
+        el.addEventListener("click", () => { this._recreateConfirming.delete(key); this.render(); });
+      });
+      this.querySelectorAll("[data-recreate-confirm]").forEach((el) => {
+        const key = el.dataset.recreateConfirm;
+        el.addEventListener("click", () => {
+          const container = this._findContainer(key);
+          if (container) this._handleRecreate(container);
+        });
       });
       this.querySelectorAll("ha-switch[data-key]").forEach((sw) => {
         sw.addEventListener("change", (e) => {
@@ -1384,7 +1448,8 @@
       const canToggle = Boolean(toggleCap || (container.start_service && container.stop_service));
       const canRestart = Boolean(this._getRestartService(container));
       const canPause = Boolean(this._getPauseService(container, false) || this._getPauseService(container, true));
-      return { entityId: stateEntityId, rawState, label, cssClass, isRunning, isStopped, isPaused, canToggle, canRestart, canPause };
+      const canRecreate = Boolean(this._getRecreateService(container));
+      return { entityId: stateEntityId, rawState, label, cssClass, isRunning, isStopped, isPaused, canToggle, canRestart, canPause, canRecreate };
     }
     _computeOverallStatus() {
       const entityId = this.config.docker_overview?.status;
@@ -1433,6 +1498,13 @@
       if (!mapping) return undefined;
       return { domain, entity_id: entityId, service: mapping.service };
     }
+    _recreateCap(entityId) {
+      if (!entityId) return undefined;
+      const domain = domainFromEntityId(entityId);
+      const mapping = domain ? RECREATE_SERVICE_MAP[domain] : undefined;
+      if (!mapping) return undefined;
+      return { domain, entity_id: entityId, service: mapping.service };
+    }
     _getRestartService(container) {
       if (!container) return undefined;
       if (container.restart_entity) {
@@ -1466,6 +1538,13 @@
         }
         return undefined;
       }
+    }
+    /** Recreate service — pulls the image at the container's already-configured tag, then recreates. */
+    _getRecreateService(container) {
+      if (!container?.recreate_entity) return undefined;
+      const cap = this._recreateCap(container.recreate_entity);
+      if (!cap) return undefined;
+      return { domain: cap.domain, service: cap.service, data: { entity_id: cap.entity_id } };
     }
     _resolveToggleService(container, shouldRun) {
       const controlEntityId = container.control_entity || container.switch_entity;
@@ -1570,6 +1649,30 @@
       } finally {
         this._pending.delete(key);
         buttonEl.disabled = false;
+        this.render();
+      }
+    }
+    /** Fires the recreate service after the inline confirm step has already been accepted. */
+    async _handleRecreate(container) {
+      const svcConfig = this._getRecreateService(container);
+      const displayName = container.name || this._friendlyName(container.status_entity || container.recreate_entity);
+      const key = this._containerKey(container);
+      this._recreateConfirming.delete(key);
+      if (!svcConfig) {
+        this._notify(this._t("notifications.missing_recreate", { name: displayName }));
+        this.render();
+        return;
+      }
+      this._pending.set(key, "recreate");
+      this.render();
+      try {
+        await this._callService(svcConfig);
+        this._notify(this._t("notifications.recreating", { name: displayName }));
+      } catch (err) {
+        console.error("docker-card recreate error", err);
+        this._notify(this._t("notifications.failed_recreate", { name: displayName }));
+      } finally {
+        this._pending.delete(key);
         this.render();
       }
     }

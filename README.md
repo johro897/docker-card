@@ -11,6 +11,7 @@ An extended version of Docker Card, inspired by [vineetchoudhary/lovelace-docker
 - [Quick start](#quick-start)
 - [Configuration options](#configuration-options)
 - [Pause / Resume](#pause--resume)
+- [Recreate container](#recreate-container)
 - [Resource graphs (CPU / Memory)](#resource-graphs-cpu--memory)
 - [WUD integration](#wud-integration)
 - [Full example configuration](#full-example-configuration)
@@ -28,6 +29,7 @@ An extended version of Docker Card, inspired by [vineetchoudhary/lovelace-docker
 - Responsive multi-column layout that adapts to screen size — set `columns: 3` for three columns on wide screens, automatically reduces on smaller screens
 - Per-container icons, health status indicators, and image version display
 - **Pause / Resume support** — pause and resume individual containers directly from the card; paused containers are highlighted in amber and the toggle switch is automatically disabled to prevent invalid state transitions
+- **Recreate container** — pull-and-recreate a container via Portainer's own button entity, with an "are you sure?" step first
 - **CPU / Memory sparkline graphs** — opt-in full-width history graphs per container with an adaptive time axis and day breaks, rendered as lightweight inline SVG from the Home Assistant history API; no extra dependencies
 - **WUD update tracking** — shows available updates with current → new version and how many days the update has been available (requires a running [What's Up Docker](https://github.com/getwud/wud) instance and the [WUD Monitor](https://github.com/johro897/wud-monitor) HA integration)
 - **WUD overview tiles** — shows last scan time and a one-click Force Scan button directly in the card overview
@@ -135,6 +137,7 @@ This walks through the minimum needed to see one real container on the card. It 
 | `restart_domain` | No | Override domain for `restart_entity` |
 | `pause_entity` | No | Entity to trigger a pause (`button`, `script`, `automation`) |
 | `resume_entity` | No | Entity to trigger a resume (`button`, `script`, `automation`) |
+| `recreate_entity` | No | Portainer's recreate-container entity (`button`, `script`, `automation`). Asks for confirmation before running — see [Recreate container](#recreate-container) |
 | `cpu_entity` | No | Sensor for CPU usage. Displayed in whatever unit the sensor itself declares (`%` if none is set) |
 | `memory_entity` | No | Sensor for memory usage — percentage or an absolute unit like `MB`/`GB`. Displayed in whatever unit the sensor itself declares (`%` if none is set) |
 | `graphs` | No | Per-container override of the card-level `graphs` setting (`true`/`false`) |
@@ -186,6 +189,20 @@ When `containers_paused` and/or `containers_stopped` are configured in `docker_o
 2 running · 1 paused · 3 stopped
 ```
 Without those sensors the tile falls back to the compact `running / total` format.
+
+## Recreate container
+Portainer's own [`button.*_recreate`](https://www.home-assistant.io/integrations/portainer) entity recreates a container by pulling the image at whatever tag it's already configured with. Add `recreate_entity` to a container and a **Recreate** button appears next to Restart:
+```yaml
+containers:
+  - name: Home Assistant
+    status_entity: sensor.home_assistant_state
+    control_entity: switch.home_assistant_container
+    recreate_entity: button.portainer_home_assistant_recreate
+```
+Like Prune, clicking **Recreate** doesn't fire immediately — it swaps to an inline "Recreate container?" confirmation with **Confirm** / **Cancel** before calling the service.
+
+> [!IMPORTANT]
+> **Only meaningful on mutable tags.** The button re-pulls the exact tag the container already uses — it does not change tags for you. A container pinned to a fixed version like `:1.4.2` will just re-pull the same image, effectively a no-op. Recreate only has a real effect on rolling tags like `:latest` or `:stable`, where the registry may have re-pointed the tag to a newer image since the container was created.
 
 ## Resource graphs (CPU / Memory)
 Set `graphs: true` to replace the plain CPU/Memory text with mini sparkline graphs per container. The graphs span the full width of the card row, below the name and action buttons, and each one shows the sensor's recent history, a time axis, and the current live value:
@@ -302,6 +319,7 @@ docker_overview:
   operating_system_version: sensor.host_os_version
   wud_last_poll: sensor.wud_wud_last_poll
   wud_scan: button.wud_wud_force_scan_all
+  prune_images: button.portainer_local_prune_images
 running_color: "var(--state-active-color)"
 not_running_color: "#c22040"
 paused_color: "#f4b942"
@@ -312,6 +330,7 @@ containers:
     restart_entity: button.home_assistant_restart_container
     pause_entity: button.home_assistant_pause_container
     resume_entity: button.home_assistant_resume_container
+    recreate_entity: button.portainer_home_assistant_recreate
     cpu_entity: sensor.home_assistant_cpu_usage
     memory_entity: sensor.home_assistant_memory_usage
     image_version_entity: sensor.home_assistant_image
@@ -406,6 +425,8 @@ shell_command:
 | Update badge not showing | Verify WUD is running, the WUD Monitor integration is installed, and `update_entity` points to the correct sensor |
 | Scan button not working | Verify the WUD Monitor integration is installed and `wud_scan` points to the correct `button.*` entity |
 | Prune button not working | Verify `prune_images` points to a valid Portainer `button.*_prune_images` entity and that the Portainer integration is connected |
+| Recreate button missing | Add `recreate_entity` pointing to the container's Portainer recreate `button.*` entity |
+| Recreate doesn't seem to update the container | Expected if the image tag is pinned (e.g. `:1.4.2`) — see the note in [Recreate container](#recreate-container). Only mutable tags like `:latest` actually change |
 
 ## Changelog
 
@@ -419,6 +440,11 @@ shell_command:
 - New `docker_overview.prune_images` option — Portainer's own prune-images button, exposed in the overview
 - Shares one tile with `wud_scan` when both are configured; renders alone otherwise
 - Asks for confirmation inline before running, since it's a destructive action
+
+**Recreate container** — requested in #8
+- New `recreate_entity` container option — pulls and recreates via Portainer's own button entity
+- Same inline confirmation step as Prune before it runs
+- Only has a real effect on mutable tags like `:latest`; pinned version tags re-pull a no-op image (documented in-card)
 
 ### 3.4
 **Resource graphs (CPU / Memory)** — requested in #3
