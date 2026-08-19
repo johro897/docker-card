@@ -29,7 +29,8 @@ An extended version of Docker Card, inspired by [vineetchoudhary/lovelace-docker
 - Per-container icons, health status indicators, and image version display
 - **Pause / Resume support** — pause and resume individual containers directly from the card; paused containers are highlighted in amber and the toggle switch is automatically disabled to prevent invalid state transitions
 - **CPU / Memory sparkline graphs** — opt-in full-width history graphs per container with an adaptive time axis and day breaks, rendered as lightweight inline SVG from the Home Assistant history API; no extra dependencies
-- **WUD update tracking** — shows available updates with current → new version and how many days the update has been available (requires a running [What's Up Docker](https://github.com/getwud/wud) instance and the [WUD Monitor](https://github.com/johro897/wud-monitor) HA integration)
+- **WUD update tracking** — shows available updates with current → new version, how many days it's been available, and an optional release notes link (requires a running [What's Up Docker](https://github.com/getwud/wud) instance and the [WUD Monitor](https://github.com/johro897/wud-monitor) HA integration)
+- **WUD check-failed indicator** — surfaces WUD's own reported error for a container (registry rate limit, auth failure) directly in the card instead of failing silently (requires WUD Monitor 2.2+)
 - **WUD overview tiles** — shows last scan time and a one-click Force Scan button directly in the card overview
 - Theme-aware styling with configurable running / paused / not-running accent colors
 - Works out-of-the-box with entities from the Portainer integration; also supports any toggle-friendly domain (`switch`, `input_boolean`, `light`, etc.)
@@ -254,6 +255,9 @@ When an update is available the card shows an inline badge with current → new 
 
 ![](screenshots/screenshot_wud.png)
 
+> [!NOTE]
+> **Requires WUD Monitor 2.2+:** if the container has a `wud.link.template` label configured in WUD (see [WUD Monitor's README](https://github.com/johro897/wud-monitor#wud-container-labels)), a small link icon appears in the badge linking to the release notes. And if WUD itself fails to check a container — a registry rate limit, an auth failure — the same badge slot shows that error in red instead of staying silent about it. Both are read from the `update_entity` sensor's `release_notes` and `error` attributes; on older WUD Monitor versions neither attribute exists and the badge renders exactly as before.
+
 ### Overview tiles — Last scan & Force Scan
 Add `wud_last_poll` and `wud_scan` to `docker_overview` to show the last scan timestamp and a one-click scan button alongside your other overview stats:
 ```yaml
@@ -391,9 +395,17 @@ shell_command:
 | Graph shorter than `graph_hours` | The recorder has no older data for that sensor. Check `purge_keep_days` and your `recorder:` filters, and compare with the sensor's own history panel — if HA can't show the range, the card can't either |
 | Changed `graph_hours`, nothing happened | Hard-refresh the browser (`Ctrl/Cmd + Shift + R`). Also verify the option sits where you intended: on the card for a global default, or inside a container entry to override just that one |
 | Update badge not showing | Verify WUD is running, the WUD Monitor integration is installed, and `update_entity` points to the correct sensor |
+| Release notes link not showing | Requires WUD Monitor 2.2+, an update currently available, and a `wud.link.template` label configured on that container in WUD — see [WUD Monitor's README](https://github.com/johro897/wud-monitor#wud-container-labels) |
+| Update badge shows a red error instead of a version | WUD itself failed to check that container (registry rate limit, auth failure, etc.) — this is WUD Monitor's `error` attribute, not a card issue. Check WUD's own logs/UI for the underlying cause |
 | Scan button not working | Verify the WUD Monitor integration is installed and `wud_scan` points to the correct `button.*` entity |
 
 ## Changelog
+
+### 3.5
+**Release notes link and WUD check-failed indicator** — requested in #10, tracked in #11
+- Update badge now shows a small link icon to the release notes when the container has a `wud.link.template` label configured in WUD (requires WUD Monitor 2.2+)
+- The same badge slot shows WUD's own reported error (registry rate limit, auth failure, etc.) in red when WUD fails to check a container, instead of staying silent about it
+- Both read new attributes (`release_notes`, `error`) on the existing `update_entity` sensor — no new config option, and no change in behavior on older WUD Monitor versions
 
 ### 3.4
 **Resource graphs (CPU / Memory)** — requested in #3

@@ -81,6 +81,7 @@
       current: "Current",
       new: "New",
       days: "d ago",
+      release_notes: "Release notes",
     },
   };
   const TRANSLATION_CACHE = new Map([[DEFAULT_LANGUAGE, DEFAULT_TRANSLATIONS]]);
@@ -561,6 +562,22 @@
           white-space: nowrap;
           flex-shrink: 0;
         }
+        .dc-update-link {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          color: #f4b942;
+          flex-shrink: 0;
+          text-decoration: none;
+          opacity: 0.85;
+        }
+        .dc-update-link:hover { opacity: 1; }
+        /* WUD check-failed variant — same slot as the update badge, styled as an error */
+        .dc-update.dc-update-error {
+          background: rgba(194, 32, 64, 0.1);
+          border-color: rgba(194, 32, 64, 0.35);
+        }
+        .dc-update-dot.error { background: #c22040; }
         .dc-actions {
           display: flex;
           align-items: center;
@@ -786,18 +803,36 @@
       if (!container.update_entity) return null;
       const entity = this._getEntity(container.update_entity);
       if (!entity) return null;
+      // WUD's own reported error for this container (e.g. registry rate limit,
+      // auth failure) — shown regardless of update_available, via WUD Monitor's
+      // "error" attribute (WUD Monitor 2.2+).
+      const errorMessage = entity.attributes?.error || null;
       const updateAvailable = entity.state === "Yes" ||
         entity.attributes?.update_available === true;
-      if (!updateAvailable) return null;
+      if (!updateAvailable) {
+        return errorMessage ? { error: errorMessage } : null;
+      }
       const currentVersion = entity.attributes?.current_version || null;
       const newVersion = entity.attributes?.new_version || null;
       const daysAvailable = entity.attributes?.days_available ?? null;
-      if (!newVersion || newVersion === "–") return null;
-      return { currentVersion, newVersion, daysAvailable };
+      // Release notes link — WUD Monitor 2.2+ "release_notes" attribute, only
+      // present when the container has a wud.link.template label set in WUD.
+      const releaseNotes = entity.attributes?.release_notes || null;
+      if (!newVersion || newVersion === "–") {
+        return errorMessage ? { error: errorMessage } : null;
+      }
+      return { currentVersion, newVersion, daysAvailable, releaseNotes };
     }
     _renderUpdateBadge(updateInfo) {
       if (!updateInfo) return "";
-      const { currentVersion, newVersion, daysAvailable } = updateInfo;
+      if (updateInfo.error) {
+        return `
+          <div class="dc-update dc-update-error">
+            <span class="dc-update-dot error"></span>
+            <span class="dc-update-text">${this._esc(updateInfo.error)}</span>
+          </div>`;
+      }
+      const { currentVersion, newVersion, daysAvailable, releaseNotes } = updateInfo;
       let versionHtml = "";
       if (currentVersion && newVersion) {
         versionHtml = `
@@ -810,11 +845,16 @@
       const daysHtml = (daysAvailable !== null && daysAvailable !== undefined)
         ? `<span class="dc-update-days">${daysAvailable}${this._t("update.days")}</span>`
         : "";
+      const linkHtml = releaseNotes ? `
+          <a class="dc-update-link" href="${this._esc(releaseNotes)}" target="_blank" rel="noreferrer" title="${this._t("update.release_notes")}">
+            <ha-icon icon="mdi:open-in-new" style="--mdc-icon-size:0.68rem"></ha-icon>
+          </a>` : "";
       return `
         <div class="dc-update">
           <span class="dc-update-dot"></span>
           ${versionHtml}
           ${daysHtml}
+          ${linkHtml}
         </div>`;
     }
     // ── Resource graph helpers (sparklines) ──────────────────────────────────
