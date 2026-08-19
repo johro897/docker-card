@@ -34,6 +34,12 @@
       os_aria: "Open operating system details",
       wud_last_poll_aria: "Open WUD last poll details",
       wud_scan_aria: "Trigger WUD scan now",
+      container_disk: "Container Disk",
+      container_disk_aria: "Open container disk usage details",
+      image_disk: "Image Disk",
+      image_disk_aria: "Open image disk usage details",
+      volume_disk: "Volume Disk",
+      volume_disk_aria: "Open volume disk usage details",
       prune_images: "Prune Images",
       prune_now: "Prune now",
       prune_pending: "Pruning…",
@@ -786,6 +792,19 @@
       const osvl = this._fmtState(osv.state);
       const osVal = osl !== "—" && osvl !== "—" ? `${osl} · ${osvl}` : osl !== "—" ? osl : osvl !== "—" ? osvl : "";
       if (!this._isBlank(osVal)) items.push({ label: this._t("overview.os"), value: osVal, badge: "OS", entityId: osv.entityId || osn.entityId, aria: this._t("overview.os_aria") });
+      // Disk usage (container / image / volume)
+      const diskFields = [
+        ["container_disk_usage", "container_disk", "CD"],
+        ["image_disk_usage", "image_disk", "ID"],
+        ["volume_disk_usage", "volume_disk", "VD"],
+      ];
+      diskFields.forEach(([key, labelKey, badge]) => {
+        if (!oc[key]) return;
+        const e = this._getEntity(oc[key]);
+        const val = this._fmtStateWithUnit(e);
+        if (this._isBlank(val)) return;
+        items.push({ label: this._t(`overview.${labelKey}`), value: val, badge, entityId: oc[key], aria: this._t(`overview.${labelKey}_aria`) });
+      });
       // WUD last poll
       if (oc.wud_last_poll) {
         const e = this._getEntity(oc.wud_last_poll);
@@ -1751,6 +1770,14 @@
     _fmtState(state) {
       if (state === undefined || state === null || state === "unknown" || state === "unavailable") return "—";
       return state;
+    }
+    /** Formats an entity's state with its own unit_of_measurement appended (e.g. disk usage sensors in GB/MB). No unit is added when the entity declares none. */
+    _fmtStateWithUnit(entity) {
+      if (!entity) return "—";
+      const s = this._fmtState(entity.state);
+      if (s === "—") return s;
+      const unit = entity.attributes?.unit_of_measurement;
+      return unit ? `${s} ${unit}` : s;
     }
     /**
      * Formats a CPU/memory entity's state using its own unit_of_measurement

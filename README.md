@@ -34,6 +34,7 @@ An extended version of Docker Card, inspired by [vineetchoudhary/lovelace-docker
 - **WUD update tracking** — shows available updates with current → new version and how many days the update has been available (requires a running [What's Up Docker](https://github.com/getwud/wud) instance and the [WUD Monitor](https://github.com/johro897/wud-monitor) HA integration)
 - **WUD overview tiles** — shows last scan time and a one-click Force Scan button directly in the card overview
 - **Prune unused images** — one-click prune of unused Docker images via Portainer's own button entity, with an inline confirmation step before it runs
+- **Disk usage overview tiles** — container, image, and volume disk usage from Portainer, shown in whatever unit the sensor reports
 - Theme-aware styling with configurable running / paused / not-running accent colors
 - Works out-of-the-box with entities from the Portainer integration; also supports any toggle-friendly domain (`switch`, `input_boolean`, `light`, etc.)
 - Optional tap/hold actions per container row for quick navigation, service calls, or external links
@@ -121,6 +122,9 @@ This walks through the minimum needed to see one real container on the card. It 
 | `image_count` | Number of Docker images |
 | `operating_system` | Host OS name |
 | `operating_system_version` | Host OS version |
+| `container_disk_usage` | Portainer sensor — total disk space used by containers |
+| `image_disk_usage` | Portainer sensor — total disk space used by images |
+| `volume_disk_usage` | Portainer sensor — total disk space used by volumes |
 | `wud_last_poll` | WUD Monitor sensor — shows timestamp of last WUD scan |
 | `wud_scan` | WUD Monitor button — click to trigger an immediate scan of all containers |
 | `prune_images` | Portainer's "Prune unused images" button — removes unused Docker images from the endpoint. Asks for confirmation before running. Shares one tile with `wud_scan` when both are set |
@@ -298,6 +302,8 @@ When both `wud_scan` and `prune_images` are set they share one overview tile, sp
 
 Clicking **Prune now** doesn't fire immediately — it swaps to an inline "Remove unused images?" confirmation with **Confirm** / **Cancel**, since this is a destructive action. Confirming calls `button.press` on the configured entity and shows "Pruning…" for 3 seconds.
 
+Pairs well with `image_disk_usage` in `docker_overview` — watch the number drop after a prune.
+
 ## Full example configuration
 Everything above, combined into one card:
 ```yaml
@@ -317,6 +323,9 @@ docker_overview:
   image_count: sensor.docker_images
   operating_system: sensor.host_os
   operating_system_version: sensor.host_os_version
+  container_disk_usage: sensor.portainer_local_container_disk_usage
+  image_disk_usage: sensor.portainer_local_image_disk_usage
+  volume_disk_usage: sensor.portainer_local_volume_disk_usage
   wud_last_poll: sensor.wud_wud_last_poll
   wud_scan: button.wud_wud_force_scan_all
   prune_images: button.portainer_local_prune_images
@@ -445,6 +454,10 @@ shell_command:
 - New `recreate_entity` container option — pulls and recreates via Portainer's own button entity
 - Same inline confirmation step as Prune before it runs
 - Only has a real effect on mutable tags like `:latest`; pinned version tags re-pull a no-op image (documented in-card)
+
+**Disk usage overview tiles** — requested in #9
+- New `container_disk_usage`, `image_disk_usage`, `volume_disk_usage` options in `docker_overview`
+- Displayed in whatever unit the sensor reports (e.g. `GB`)
 
 ### 3.4
 **Resource graphs (CPU / Memory)** — requested in #3
