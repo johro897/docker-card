@@ -11,6 +11,7 @@ An extended version of Docker Card, inspired by [vineetchoudhary/lovelace-docker
 - [Quick start](#quick-start)
 - [Configuration options](#configuration-options)
 - [Pause / Resume](#pause--resume)
+- [Recreate container](#recreate-container)
 - [Resource graphs (CPU / Memory)](#resource-graphs-cpu--memory)
 - [WUD integration](#wud-integration)
 - [Full example configuration](#full-example-configuration)
@@ -28,9 +29,13 @@ An extended version of Docker Card, inspired by [vineetchoudhary/lovelace-docker
 - Responsive multi-column layout that adapts to screen size — set `columns: 3` for three columns on wide screens, automatically reduces on smaller screens
 - Per-container icons, health status indicators, and image version display
 - **Pause / Resume support** — pause and resume individual containers directly from the card; paused containers are highlighted in amber and the toggle switch is automatically disabled to prevent invalid state transitions
+- **Recreate container** — pull-and-recreate a container via Portainer's own button entity, with an "are you sure?" step first
 - **CPU / Memory sparkline graphs** — opt-in full-width history graphs per container with an adaptive time axis and day breaks, rendered as lightweight inline SVG from the Home Assistant history API; no extra dependencies
-- **WUD update tracking** — shows available updates with current → new version and how many days the update has been available (requires a running [What's Up Docker](https://github.com/getwud/wud) instance and the [WUD Monitor](https://github.com/johro897/wud-monitor) HA integration)
+- **WUD update tracking** — shows available updates with current → new version, how many days it's been available, and an optional release notes link (requires a running [What's Up Docker](https://github.com/getwud/wud) instance and the [WUD Monitor](https://github.com/johro897/wud-monitor) HA integration)
+- **WUD check-failed indicator** — surfaces WUD's own reported error for a container (registry rate limit, auth failure) directly in the card instead of failing silently (requires WUD Monitor 2.2+)
 - **WUD overview tiles** — shows last scan time and a one-click Force Scan button directly in the card overview
+- **Prune unused images** — one-click prune of unused Docker images via Portainer's own button entity, with an inline confirmation step before it runs
+- **Disk usage overview tiles** — container, image, and volume disk usage from Portainer, shown in whatever unit the sensor reports
 - Theme-aware styling with configurable running / paused / not-running accent colors
 - Works out-of-the-box with entities from the Portainer integration; also supports any toggle-friendly domain (`switch`, `input_boolean`, `light`, etc.)
 - Optional tap/hold actions per container row for quick navigation, service calls, or external links
@@ -118,8 +123,15 @@ This walks through the minimum needed to see one real container on the card. It 
 | `image_count` | Number of Docker images |
 | `operating_system` | Host OS name |
 | `operating_system_version` | Host OS version |
+| `container_disk_usage` | Portainer sensor — total disk space used by containers. See note below if it stays `unknown`/`unavailable` |
+| `image_disk_usage` | Portainer sensor — total disk space used by images. See note below if it stays `unknown`/`unavailable` |
+| `volume_disk_usage` | Portainer sensor — total disk space used by volumes. See note below if it stays `unknown`/`unavailable` |
 | `wud_last_poll` | WUD Monitor sensor — shows timestamp of last WUD scan |
 | `wud_scan` | WUD Monitor button — click to trigger an immediate scan of all containers |
+| `prune_images` | Portainer's "Prune unused images" button — removes unused Docker images from the endpoint. Asks for confirmation before running. Shares one tile with `wud_scan` when both are set |
+
+> [!NOTE]
+> **If `container_disk_usage` / `image_disk_usage` / `volume_disk_usage` stay stuck on `unknown` — or show as `unavailable` entirely — this is a known Portainer/Home Assistant limitation, not a card bug.** These sensors are populated via Docker's `docker system df` command, which is [documented to be slow on overlay2 filesystems](https://github.com/home-assistant/core/issues/165617) — common on Linux and NAS Docker hosts. If it exceeds the integration's timeout, those specific sensors either stay `unknown` or are marked `unavailable` outright (both outcomes are reported against the same upstream issue), while the rest of the integration keeps working normally. Home Assistant closed the upstream issue as "not planned," so there's currently no fix on their side either. You can confirm this is the cause by running `time docker system df` on your Docker host — if it takes more than a few seconds, that's why.
 
 ### Container options
 | Option | Required | Description |
@@ -133,8 +145,9 @@ This walks through the minimum needed to see one real container on the card. It 
 | `restart_domain` | No | Override domain for `restart_entity` |
 | `pause_entity` | No | Entity to trigger a pause (`button`, `script`, `automation`) |
 | `resume_entity` | No | Entity to trigger a resume (`button`, `script`, `automation`) |
-| `cpu_entity` | No | Sensor for CPU usage (%) |
-| `memory_entity` | No | Sensor for memory usage (%) |
+| `recreate_entity` | No | Portainer's recreate-container entity (`button`, `script`, `automation`). Asks for confirmation before running — see [Recreate container](#recreate-container) |
+| `cpu_entity` | No | Sensor for CPU usage. Displayed in whatever unit the sensor itself declares (`%` if none is set) |
+| `memory_entity` | No | Sensor for memory usage — percentage or an absolute unit like `MB`/`GB`. Displayed in whatever unit the sensor itself declares (`%` if none is set) |
 | `graphs` | No | Per-container override of the card-level `graphs` setting (`true`/`false`) |
 | `graph_hours` | No | Per-container history window in hours |
 | `graph_height` | No | Per-container graph height in pixels |
@@ -184,6 +197,20 @@ When `containers_paused` and/or `containers_stopped` are configured in `docker_o
 2 running · 1 paused · 3 stopped
 ```
 Without those sensors the tile falls back to the compact `running / total` format.
+
+## Recreate container
+Portainer's own [`button.*_recreate`](https://www.home-assistant.io/integrations/portainer) entity recreates a container by pulling the image at whatever tag it's already configured with. Add `recreate_entity` to a container and a **Recreate** button appears next to Restart:
+```yaml
+containers:
+  - name: Home Assistant
+    status_entity: sensor.home_assistant_state
+    control_entity: switch.home_assistant_container
+    recreate_entity: button.portainer_home_assistant_recreate
+```
+Like Prune, clicking **Recreate** doesn't fire immediately — it swaps to an inline "Recreate container?" confirmation with **Confirm** / **Cancel** before calling the service.
+
+> [!IMPORTANT]
+> **Only meaningful on mutable tags.** The button re-pulls the exact tag the container already uses — it does not change tags for you. A container pinned to a fixed version like `:1.4.2` will just re-pull the same image, effectively a no-op. Recreate only has a real effect on rolling tags like `:latest` or `:stable`, where the registry may have re-pointed the tag to a newer image since the container was created.
 
 ## Resource graphs (CPU / Memory)
 Set `graphs: true` to replace the plain CPU/Memory text with mini sparkline graphs per container. The graphs span the full width of the card row, below the name and action buttons, and each one shows the sensor's recent history, a time axis, and the current live value:
@@ -254,6 +281,9 @@ When an update is available the card shows an inline badge with current → new 
 
 ![](screenshots/screenshot_wud.png)
 
+> [!NOTE]
+> **Requires WUD Monitor 2.2+:** if the container has a `wud.link.template` label configured in WUD (see [WUD Monitor's README](https://github.com/johro897/wud-monitor#wud-container-labels)), a small link icon appears in the badge linking to the release notes. And if WUD itself fails to check a container — a registry rate limit, an auth failure — the same badge slot shows that error in red instead of staying silent about it. Both are read from the `update_entity` sensor's `release_notes` and `error` attributes; on older WUD Monitor versions neither attribute exists and the badge renders exactly as before.
+
 ### Overview tiles — Last scan & Force Scan
 Add `wud_last_poll` and `wud_scan` to `docker_overview` to show the last scan timestamp and a one-click scan button alongside your other overview stats:
 ```yaml
@@ -267,6 +297,22 @@ Clicking **Scan now** calls `button.press` on the WUD Monitor Force Scan button.
 
 > [!NOTE]
 > Without the WUD Monitor integration, `update_entity`, `wud_last_poll`, and `wud_scan` have no effect — the rest of the card works normally.
+
+### Prune unused images
+Portainer's own [`button.*_prune_images`](https://www.home-assistant.io/integrations/portainer) entity removes unused Docker images from the endpoint. Add it as `prune_images` in `docker_overview`:
+```yaml
+docker_overview:
+  wud_scan: button.wud_wud_force_scan_all
+  prune_images: button.portainer_local_prune_images
+```
+When both `wud_scan` and `prune_images` are set they share one overview tile, split by a divider — the two maintenance actions live together instead of being scattered among the stat tiles. With only one of the two configured, it renders alone exactly as `wud_scan` always has.
+
+Clicking **Prune now** doesn't fire immediately — it swaps to an inline "Remove unused images?" confirmation with **Confirm** / **Cancel**, since this is a destructive action. Confirming calls `button.press` on the configured entity and shows "Pruning…" for 3 seconds.
+
+Pairs well with `image_disk_usage` in `docker_overview` — watch the number drop after a prune.
+
+> [!WARNING]
+> **Pruning may silently leave tagged-but-unused images behind — this is a known Portainer integration bug, not a card bug.** [home-assistant/core#179542](https://github.com/home-assistant/core/issues/179542) confirms the integration's `prune_images` action doesn't correctly pass its `dangling: false` filter to Portainer's API — calling Portainer's own API directly with the same parameters prunes correctly, so the bug is in the integration, not Portainer or this card. No fix as of this writing. If images you expect to be removed remain after pruning, this is why.
 
 ## Full example configuration
 Everything above, combined into one card:
@@ -287,8 +333,12 @@ docker_overview:
   image_count: sensor.docker_images
   operating_system: sensor.host_os
   operating_system_version: sensor.host_os_version
+  container_disk_usage: sensor.portainer_local_container_disk_usage
+  image_disk_usage: sensor.portainer_local_image_disk_usage
+  volume_disk_usage: sensor.portainer_local_volume_disk_usage
   wud_last_poll: sensor.wud_wud_last_poll
   wud_scan: button.wud_wud_force_scan_all
+  prune_images: button.portainer_local_prune_images
 running_color: "var(--state-active-color)"
 not_running_color: "#c22040"
 paused_color: "#f4b942"
@@ -299,6 +349,7 @@ containers:
     restart_entity: button.home_assistant_restart_container
     pause_entity: button.home_assistant_pause_container
     resume_entity: button.home_assistant_resume_container
+    recreate_entity: button.portainer_home_assistant_recreate
     cpu_entity: sensor.home_assistant_cpu_usage
     memory_entity: sensor.home_assistant_memory_usage
     image_version_entity: sensor.home_assistant_image
@@ -391,9 +442,42 @@ shell_command:
 | Graph shorter than `graph_hours` | The recorder has no older data for that sensor. Check `purge_keep_days` and your `recorder:` filters, and compare with the sensor's own history panel — if HA can't show the range, the card can't either |
 | Changed `graph_hours`, nothing happened | Hard-refresh the browser (`Ctrl/Cmd + Shift + R`). Also verify the option sits where you intended: on the card for a global default, or inside a container entry to override just that one |
 | Update badge not showing | Verify WUD is running, the WUD Monitor integration is installed, and `update_entity` points to the correct sensor |
+| Release notes link not showing | Requires WUD Monitor 2.2+, an update currently available, and a `wud.link.template` label configured on that container in WUD — see [WUD Monitor's README](https://github.com/johro897/wud-monitor#wud-container-labels) |
+| Update badge shows a red error instead of a version | WUD itself failed to check that container (registry rate limit, auth failure, etc.) — this is WUD Monitor's `error` attribute, not a card issue. Check WUD's own logs/UI for the underlying cause |
 | Scan button not working | Verify the WUD Monitor integration is installed and `wud_scan` points to the correct `button.*` entity |
+| Prune button not working | Verify `prune_images` points to a valid Portainer `button.*_prune_images` entity and that the Portainer integration is connected |
+| Pruning runs but tagged images stay behind | Known Portainer integration bug, not a card bug — see the warning in [Prune unused images](#prune-unused-images) ([home-assistant/core#179542](https://github.com/home-assistant/core/issues/179542)) |
+| Recreate button missing | Add `recreate_entity` pointing to the container's Portainer recreate `button.*` entity |
+| Recreate doesn't seem to update the container | Expected if the image tag is pinned (e.g. `:1.4.2`) — see the note in [Recreate container](#recreate-container). Only mutable tags like `:latest` actually change |
+| Disk usage tiles stuck on "—" / entity shows `unknown` or `unavailable` | Known upstream Portainer/HA limitation, not a card bug — see the note under [docker_overview options](#docker_overview-options). `docker system df` is slow on overlay2 filesystems and can time out ([tracked upstream](https://github.com/home-assistant/core/issues/165617), closed as not planned) |
 
 ## Changelog
+
+### 3.6
+**Fix: `cpu_entity` / `memory_entity` now respect their own unit** — requested in #6
+- Values and graph labels now use the sensor's own `unit_of_measurement` (e.g. `MB`, `GB`) instead of always appending `%`
+- Falls back to `%` for sensors that don't declare a unit — no change for existing percentage-based setups
+- The graphs themselves were already unit-agnostic (auto-scaled to the actual data); only the text label was hardcoded
+
+**Prune unused images** — requested in #7
+- New `docker_overview.prune_images` option — Portainer's own prune-images button, exposed in the overview
+- Shares one tile with `wud_scan` when both are configured; renders alone otherwise
+- Asks for confirmation inline before running, since it's a destructive action
+- Known limitation: a Portainer integration bug can leave tagged-but-unused images behind after pruning — not fixable on the card's side, see the warning in [Prune unused images](#prune-unused-images)
+
+**Recreate container** — requested in #8
+- New `recreate_entity` container option — pulls and recreates via Portainer's own button entity
+- Same inline confirmation step as Prune before it runs
+- Only has a real effect on mutable tags like `:latest`; pinned version tags re-pull a no-op image (documented in-card)
+
+**Disk usage overview tiles** — requested in #9
+- New `container_disk_usage`, `image_disk_usage`, `volume_disk_usage` options in `docker_overview`
+- Displayed in whatever unit the sensor reports (e.g. `GB`)
+
+**Release notes link and WUD check-failed indicator** — requested in #10, tracked in #11
+- Update badge now shows a small link icon to the release notes when the container has a `wud.link.template` label configured in WUD (requires WUD Monitor 2.2+)
+- The same badge slot shows WUD's own reported error (registry rate limit, auth failure, etc.) in red when WUD fails to check a container, instead of staying silent about it
+- Both read new attributes (`release_notes`, `error`) on the existing `update_entity` sensor — no new config option, and no change in behavior on older WUD Monitor versions
 
 ### 3.4
 **Resource graphs (CPU / Memory)** — requested in #3

@@ -34,6 +34,19 @@
       os_aria: "Open operating system details",
       wud_last_poll_aria: "Open WUD last poll details",
       wud_scan_aria: "Trigger WUD scan now",
+      container_disk: "Container Disk",
+      container_disk_aria: "Open container disk usage details",
+      image_disk: "Image Disk",
+      image_disk_aria: "Open image disk usage details",
+      volume_disk: "Volume Disk",
+      volume_disk_aria: "Open volume disk usage details",
+      prune_images: "Prune Images",
+      prune_now: "Prune now",
+      prune_pending: "Pruning…",
+      prune_confirm_text: "Remove unused images?",
+      prune_confirm: "Confirm",
+      prune_cancel: "Cancel",
+      prune_aria: "Prune unused Docker images",
     },
     container: { image: "Image" },
     aria: {
@@ -52,6 +65,12 @@
       stop_container: "Stop container",
       pause_container: "Pause container",
       resume_container: "Resume container",
+      recreate: "Recreate",
+      recreate_container: "Recreate container",
+      recreate_confirm_text: "Recreate container?",
+      recreating: "Recreating…",
+      confirm: "Confirm",
+      cancel: "Cancel",
     },
     notifications: {
       starting: "Starting {name}…",
@@ -68,8 +87,13 @@
       missing_restart: "No restart service configured for {name}.",
       missing_pause: "No pause service configured for {name}.",
       missing_resume: "No resume service configured for {name}.",
+      missing_recreate: "No recreate service configured for {name}.",
+      recreating: "Recreating {name}…",
+      failed_recreate: "Failed to recreate {name}.",
       wud_scan_triggered: "WUD scan triggered.",
       wud_scan_failed: "WUD scan failed.",
+      prune_triggered: "Prune started.",
+      prune_failed: "Prune failed.",
     },
     status: {
       online: "Online", offline: "Offline", idle: "Idle",
@@ -81,6 +105,7 @@
       current: "Current",
       new: "New",
       days: "d ago",
+      release_notes: "Release notes",
     },
   };
   const TRANSLATION_CACHE = new Map([[DEFAULT_LANGUAGE, DEFAULT_TRANSLATIONS]]);
@@ -125,6 +150,11 @@
     script: { service: "turn_on" },
     automation: { service: "trigger" },
   };
+  const RECREATE_SERVICE_MAP = {
+    button: { service: "press" },
+    script: { service: "turn_on" },
+    automation: { service: "trigger" },
+  };
   const domainFromEntityId = (entityId) => {
     if (typeof entityId !== "string") return undefined;
     const i = entityId.indexOf(".");
@@ -148,6 +178,9 @@
       this._listId = `dc-list-${cryptoRandom()}`;
       this._columns = 1;
       this._wudScanPending = false;
+      this._pruneConfirming = false;
+      this._prunePending = false;
+      this._recreateConfirming = new Set(); // container keys currently showing the recreate confirm step
       // History cache for sparkline graphs: entityId -> { points, fetchedAt, promise }
       this._history = new Map();
       this._renderQueued = false;
@@ -272,6 +305,40 @@
         .dc-ov-item.wud-scan:hover { border-color: var(--primary-color); }
         .dc-ov-item.wud-scan.pending { opacity: 0.5; cursor: progress; pointer-events: none; }
         .dc-ov-item.wud-scan:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
+        /* Maintenance tile: WUD scan + Prune images share one tile when both are configured */
+        .dc-ov-item.dc-maint { padding: 0; }
+        .dc-maint-row { display: flex; align-items: stretch; width: 100%; }
+        .dc-maint-half {
+          flex: 1 1 50%;
+          display: flex;
+          align-items: center;
+          gap: 0.55rem;
+          min-width: 0;
+          padding: 0.4rem 0.65rem;
+          cursor: pointer;
+        }
+        .dc-maint-half:hover { background: rgba(128,128,128,0.06); }
+        .dc-maint-half.pending { opacity: 0.5; cursor: progress; pointer-events: none; }
+        .dc-maint-half:focus-visible { outline: 2px solid var(--primary-color); outline-offset: -2px; }
+        .dc-maint-divider { width: 1px; background: var(--divider-color, rgba(128,128,128,0.2)); flex-shrink: 0; margin: 0.5rem 0; }
+        .dc-ov-badge.prune { background: rgba(46,143,87,0.14); color: var(--dc-rc, #2e8f57); }
+        .dc-ov-value.prune-action { color: var(--dc-rc, #2e8f57); font-size: 0.78rem; }
+        /* Inline confirm step (Prune) */
+        .dc-confirm-row { display: flex; align-items: center; gap: 0.35rem; font-size: 0.7rem; flex-wrap: wrap; }
+        .dc-confirm-text { color: var(--primary-text-color); white-space: nowrap; }
+        .dc-confirm-btn {
+          border: none; border-radius: 999px; font: inherit; font-size: 0.66rem; font-weight: 700;
+          padding: 0.2rem 0.55rem; cursor: pointer; white-space: nowrap;
+        }
+        .dc-confirm-btn.yes { background: var(--dc-nrc, #c22040); color: #fff; }
+        .dc-confirm-btn.no {
+          background: transparent; color: var(--secondary-text-color);
+          border: 1px solid var(--divider-color, rgba(128,128,128,0.3));
+        }
+        @media (max-width: 520px) {
+          .dc-maint-row { flex-direction: column; }
+          .dc-maint-divider { width: auto; height: 1px; margin: 0 0.65rem; }
+        }
         .dc-ov-badge {
           width: 1.9rem;
           height: 1.9rem;
@@ -561,6 +628,22 @@
           white-space: nowrap;
           flex-shrink: 0;
         }
+        .dc-update-link {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          color: #f4b942;
+          flex-shrink: 0;
+          text-decoration: none;
+          opacity: 0.85;
+        }
+        .dc-update-link:hover { opacity: 1; }
+        /* WUD check-failed variant — same slot as the update badge, styled as an error */
+        .dc-update.dc-update-error {
+          background: rgba(194, 32, 64, 0.1);
+          border-color: rgba(194, 32, 64, 0.35);
+        }
+        .dc-update-dot.error { background: #c22040; }
         .dc-actions {
           display: flex;
           align-items: center;
@@ -599,6 +682,17 @@
         .dc-pause:hover  { border-color: var(--dc-pc); color: var(--dc-pc); }
         .dc-pause:active { background: var(--dc-pc); color: #fff; border-color: var(--dc-pc); }
         .dc-pause:disabled { opacity: 0.5; cursor: not-allowed; }
+        /* Recreate button — teal-ish accent, distinct from the neutral Restart/Pause pills */
+        .dc-recreate {
+          border: 1px solid rgba(46,143,87,0.4);
+          background: rgba(46,143,87,0.08);
+          color: var(--dc-rc, #2e8f57);
+          font: inherit; font-size: 0.75rem; border-radius: 999px;
+          padding: 0.28rem 0.75rem; cursor: pointer; white-space: nowrap;
+          transition: background 0.15s ease, border-color 0.15s ease;
+        }
+        .dc-recreate:hover { background: rgba(46,143,87,0.16); }
+        .dc-recreate:disabled { opacity: 0.5; cursor: not-allowed; }
         ha-switch[disabled] { opacity: 0.5; }
         .dc-empty {
           font-size: 0.82rem;
@@ -715,6 +809,19 @@
       const osvl = this._fmtState(osv.state);
       const osVal = osl !== "—" && osvl !== "—" ? `${osl} · ${osvl}` : osl !== "—" ? osl : osvl !== "—" ? osvl : "";
       if (!this._isBlank(osVal)) items.push({ label: this._t("overview.os"), value: osVal, badge: "OS", entityId: osv.entityId || osn.entityId, aria: this._t("overview.os_aria") });
+      // Disk usage (container / image / volume)
+      const diskFields = [
+        ["container_disk_usage", "container_disk", "CD"],
+        ["image_disk_usage", "image_disk", "ID"],
+        ["volume_disk_usage", "volume_disk", "VD"],
+      ];
+      diskFields.forEach(([key, labelKey, badge]) => {
+        if (!oc[key]) return;
+        const e = this._getEntity(oc[key]);
+        const val = this._fmtStateWithUnit(e);
+        if (this._isBlank(val)) return;
+        items.push({ label: this._t(`overview.${labelKey}`), value: val, badge, entityId: oc[key], aria: this._t(`overview.${labelKey}_aria`) });
+      });
       // WUD last poll
       if (oc.wud_last_poll) {
         const e = this._getEntity(oc.wud_last_poll);
@@ -728,7 +835,7 @@
           aria: this._t("overview.wud_last_poll_aria"),
         });
       }
-      if (!items.length && !oc.wud_scan) return "";
+      if (!items.length && !oc.wud_scan && !oc.prune_images) return "";
       let html = `<div class="dc-overview">`;
       html += items.map((item) => `
         <div class="dc-ov-item${item.entityId ? " actionable" : ""}"
@@ -741,25 +848,76 @@
               : `<div class="dc-ov-value${item.cls ? " " + item.cls : ""}">${this._esc(item.value)}</div>`}
           </div>
         </div>`).join("");
-      // WUD scan button tile
-      if (oc.wud_scan) {
-        const scanCls = this._wudScanPending ? " pending" : "";
+      // WUD scan + Prune images — share one tile when both are configured,
+      // otherwise each renders alone exactly as before.
+      if (oc.wud_scan && oc.prune_images) {
         html += `
-          <div class="dc-ov-item wud-scan${scanCls}"
-            role="button" tabindex="0"
-            aria-label="${this._t("overview.wud_scan_aria")}"
-            data-wud-scan="${this._esc(oc.wud_scan)}">
-            <div class="dc-ov-badge wud">
-              <ha-icon icon="mdi:refresh" style="--mdc-icon-size:1rem"></ha-icon>
-            </div>
-            <div class="dc-ov-text">
-              <div class="dc-ov-label">${this._t("overview.wud_scan")}</div>
-              <div class="dc-ov-value wud-action">${this._wudScanPending ? "Scanning…" : "Scan now"}</div>
+          <div class="dc-ov-item dc-maint">
+            <div class="dc-maint-row">
+              ${this._renderWudScanHalf(oc.wud_scan)}
+              <div class="dc-maint-divider"></div>
+              ${this._renderPruneHalf(oc.prune_images)}
             </div>
           </div>`;
+      } else if (oc.wud_scan) {
+        html += `<div class="dc-ov-item wud-scan${this._wudScanPending ? " pending" : ""}">${this._renderWudScanHalf(oc.wud_scan)}</div>`;
+      } else if (oc.prune_images) {
+        html += `<div class="dc-ov-item">${this._renderPruneHalf(oc.prune_images)}</div>`;
       }
       html += `</div>`;
       return html;
+    }
+    /** WUD scan content — identical markup whether shown standalone or as one half of the combined maintenance tile. */
+    _renderWudScanHalf(entityId) {
+      return `
+        <div class="dc-maint-half${this._wudScanPending ? " pending" : ""}"
+          role="button" tabindex="0"
+          aria-label="${this._t("overview.wud_scan_aria")}"
+          data-wud-scan="${this._esc(entityId)}">
+          <div class="dc-ov-badge wud">
+            <ha-icon icon="mdi:refresh" style="--mdc-icon-size:1rem"></ha-icon>
+          </div>
+          <div class="dc-ov-text">
+            <div class="dc-ov-label">${this._t("overview.wud_scan")}</div>
+            <div class="dc-ov-value wud-action">${this._wudScanPending ? "Scanning…" : "Scan now"}</div>
+          </div>
+        </div>`;
+    }
+    /** Prune content — idle → inline confirm → pending. Same markup standalone or combined. */
+    _renderPruneHalf(entityId) {
+      const badge = `<div class="dc-ov-badge prune"><ha-icon icon="mdi:broom" style="--mdc-icon-size:1rem"></ha-icon></div>`;
+      if (this._prunePending) {
+        return `
+          <div class="dc-maint-half pending">
+            ${badge}
+            <div class="dc-ov-text">
+              <div class="dc-ov-label">${this._t("overview.prune_images")}</div>
+              <div class="dc-ov-value prune-action">${this._t("overview.prune_pending")}</div>
+            </div>
+          </div>`;
+      }
+      if (this._pruneConfirming) {
+        return `
+          <div class="dc-maint-half" style="cursor:default">
+            ${badge}
+            <div class="dc-confirm-row">
+              <span class="dc-confirm-text">${this._t("overview.prune_confirm_text")}</span>
+              <button class="dc-confirm-btn yes" data-prune-confirm="${this._esc(entityId)}">${this._t("overview.prune_confirm")}</button>
+              <button class="dc-confirm-btn no" data-prune-cancel>${this._t("overview.prune_cancel")}</button>
+            </div>
+          </div>`;
+      }
+      return `
+        <div class="dc-maint-half"
+          role="button" tabindex="0"
+          aria-label="${this._t("overview.prune_aria")}"
+          data-prune-arm="${this._esc(entityId)}">
+          ${badge}
+          <div class="dc-ov-text">
+            <div class="dc-ov-label">${this._t("overview.prune_images")}</div>
+            <div class="dc-ov-value prune-action">${this._t("overview.prune_now")}</div>
+          </div>
+        </div>`;
     }
     _renderSection() {
       const expanded = this._expanded;
@@ -786,18 +944,36 @@
       if (!container.update_entity) return null;
       const entity = this._getEntity(container.update_entity);
       if (!entity) return null;
+      // WUD's own reported error for this container (e.g. registry rate limit,
+      // auth failure) — shown regardless of update_available, via WUD Monitor's
+      // "error" attribute (WUD Monitor 2.2+).
+      const errorMessage = entity.attributes?.error || null;
       const updateAvailable = entity.state === "Yes" ||
         entity.attributes?.update_available === true;
-      if (!updateAvailable) return null;
+      if (!updateAvailable) {
+        return errorMessage ? { error: errorMessage } : null;
+      }
       const currentVersion = entity.attributes?.current_version || null;
       const newVersion = entity.attributes?.new_version || null;
       const daysAvailable = entity.attributes?.days_available ?? null;
-      if (!newVersion || newVersion === "–") return null;
-      return { currentVersion, newVersion, daysAvailable };
+      // Release notes link — WUD Monitor 2.2+ "release_notes" attribute, only
+      // present when the container has a wud.link.template label set in WUD.
+      const releaseNotes = entity.attributes?.release_notes || null;
+      if (!newVersion || newVersion === "–") {
+        return errorMessage ? { error: errorMessage } : null;
+      }
+      return { currentVersion, newVersion, daysAvailable, releaseNotes };
     }
     _renderUpdateBadge(updateInfo) {
       if (!updateInfo) return "";
-      const { currentVersion, newVersion, daysAvailable } = updateInfo;
+      if (updateInfo.error) {
+        return `
+          <div class="dc-update dc-update-error">
+            <span class="dc-update-dot error"></span>
+            <span class="dc-update-text">${this._esc(updateInfo.error)}</span>
+          </div>`;
+      }
+      const { currentVersion, newVersion, daysAvailable, releaseNotes } = updateInfo;
       let versionHtml = "";
       if (currentVersion && newVersion) {
         versionHtml = `
@@ -810,11 +986,16 @@
       const daysHtml = (daysAvailable !== null && daysAvailable !== undefined)
         ? `<span class="dc-update-days">${daysAvailable}${this._t("update.days")}</span>`
         : "";
+      const linkHtml = releaseNotes ? `
+          <a class="dc-update-link" href="${this._esc(releaseNotes)}" target="_blank" rel="noreferrer" title="${this._t("update.release_notes")}">
+            <ha-icon icon="mdi:open-in-new" style="--mdc-icon-size:0.68rem"></ha-icon>
+          </a>` : "";
       return `
         <div class="dc-update">
           <span class="dc-update-dot"></span>
           ${versionHtml}
           ${daysHtml}
+          ${linkHtml}
         </div>`;
     }
     // ── Resource graph helpers (sparklines) ──────────────────────────────────
@@ -1054,8 +1235,8 @@
       let graphHtml = "";
       const cpuE = c.cpu_entity ? this._getEntity(c.cpu_entity) : undefined;
       const memE = c.memory_entity ? this._getEntity(c.memory_entity) : undefined;
-      const cpuV = cpuE ? this._fmtPct(cpuE.state) : null;
-      const memV = memE ? this._fmtPct(memE.state) : null;
+      const cpuV = cpuE ? this._fmtResourceValue(cpuE) : null;
+      const memV = memE ? this._fmtResourceValue(memE) : null;
       // graphs: per-container override, falls back to card-level config
       const graphsEnabled = c.graphs !== undefined ? Boolean(c.graphs) : Boolean(this.config.graphs);
       if (graphsEnabled && (c.cpu_entity || c.memory_entity)) {
@@ -1084,6 +1265,26 @@
             ${pauseBtnLabel}
            </button>`
         : "";
+      // Recreate button: idle → inline "are you sure?" confirm → pending.
+      // Hidden entirely when no recreate_entity is configured.
+      const recreateConfirming = this._recreateConfirming.has(key);
+      let recreateHtml = "";
+      if (si.canRecreate) {
+        if (recreateConfirming) {
+          recreateHtml = `
+            <span class="dc-confirm-row">
+              <span class="dc-confirm-text">${this._t("actions.recreate_confirm_text")}</span>
+              <button class="dc-confirm-btn yes" data-recreate-confirm="${key}">${this._t("actions.confirm")}</button>
+              <button class="dc-confirm-btn no" data-recreate-cancel="${key}">${this._t("actions.cancel")}</button>
+            </span>`;
+        } else {
+          recreateHtml = `
+            <button class="dc-recreate" data-recreate-arm="${key}" ${pending ? "disabled" : ""}
+              title="${this._t("actions.recreate_container")}">
+              ${pending && this._pending.get(key) === "recreate" ? this._t("actions.recreating") : this._t("actions.recreate")}
+            </button>`;
+        }
+      }
       return `
         <div class="dc-row ${si.cssClass}${pending ? " pending" : ""}${isActionable ? " actionable" : ""}"
           data-key="${key}"
@@ -1109,6 +1310,7 @@
             <button class="dc-restart" data-key="${key}" ${!si.canRestart || pending ? "disabled" : ""}>
               ${this._t("actions.restart")}
             </button>
+            ${recreateHtml}
           </div>
           ${graphHtml}
         </div>`;
@@ -1147,6 +1349,51 @@
         el.addEventListener("click", handler);
         el.addEventListener("keydown", (e) => {
           if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handler(); }
+        });
+      });
+      // Prune images — arm the inline confirm step, cancel it, or actually run it.
+      this.querySelectorAll("[data-prune-arm]").forEach((el) => {
+        const arm = () => { this._pruneConfirming = true; this.render(); };
+        el.addEventListener("click", arm);
+        el.addEventListener("keydown", (e) => {
+          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); arm(); }
+        });
+      });
+      this.querySelector("[data-prune-cancel]")?.addEventListener("click", () => {
+        this._pruneConfirming = false;
+        this.render();
+      });
+      this.querySelector("[data-prune-confirm]")?.addEventListener("click", async (e) => {
+        const entityId = e.currentTarget.dataset.pruneConfirm;
+        if (this._prunePending || !entityId || !this._hass) return;
+        this._pruneConfirming = false;
+        this._prunePending = true;
+        this.render();
+        try {
+          await this._hass.callService("button", "press", { entity_id: entityId });
+          this._notify(this._t("notifications.prune_triggered"));
+        } catch (err) {
+          console.error("docker-card: prune failed", err);
+          this._notify(this._t("notifications.prune_failed"));
+        } finally {
+          setTimeout(() => { this._prunePending = false; this.render(); }, 3000);
+        }
+      });
+      // Recreate container — same arm / cancel / confirm pattern as Prune, keyed per container.
+      this.querySelectorAll("[data-recreate-arm]").forEach((el) => {
+        const key = el.dataset.recreateArm;
+        const arm = () => { this._recreateConfirming.add(key); this.render(); };
+        el.addEventListener("click", arm);
+      });
+      this.querySelectorAll("[data-recreate-cancel]").forEach((el) => {
+        const key = el.dataset.recreateCancel;
+        el.addEventListener("click", () => { this._recreateConfirming.delete(key); this.render(); });
+      });
+      this.querySelectorAll("[data-recreate-confirm]").forEach((el) => {
+        const key = el.dataset.recreateConfirm;
+        el.addEventListener("click", () => {
+          const container = this._findContainer(key);
+          if (container) this._handleRecreate(container);
         });
       });
       this.querySelectorAll("ha-switch[data-key]").forEach((sw) => {
@@ -1260,7 +1507,8 @@
       const canToggle = Boolean(toggleCap || (container.start_service && container.stop_service));
       const canRestart = Boolean(this._getRestartService(container));
       const canPause = Boolean(this._getPauseService(container, false) || this._getPauseService(container, true));
-      return { entityId: stateEntityId, rawState, label, cssClass, isRunning, isStopped, isPaused, canToggle, canRestart, canPause };
+      const canRecreate = Boolean(this._getRecreateService(container));
+      return { entityId: stateEntityId, rawState, label, cssClass, isRunning, isStopped, isPaused, canToggle, canRestart, canPause, canRecreate };
     }
     _computeOverallStatus() {
       const entityId = this.config.docker_overview?.status;
@@ -1309,6 +1557,13 @@
       if (!mapping) return undefined;
       return { domain, entity_id: entityId, service: mapping.service };
     }
+    _recreateCap(entityId) {
+      if (!entityId) return undefined;
+      const domain = domainFromEntityId(entityId);
+      const mapping = domain ? RECREATE_SERVICE_MAP[domain] : undefined;
+      if (!mapping) return undefined;
+      return { domain, entity_id: entityId, service: mapping.service };
+    }
     _getRestartService(container) {
       if (!container) return undefined;
       if (container.restart_entity) {
@@ -1342,6 +1597,13 @@
         }
         return undefined;
       }
+    }
+    /** Recreate service — pulls the image at the container's already-configured tag, then recreates. */
+    _getRecreateService(container) {
+      if (!container?.recreate_entity) return undefined;
+      const cap = this._recreateCap(container.recreate_entity);
+      if (!cap) return undefined;
+      return { domain: cap.domain, service: cap.service, data: { entity_id: cap.entity_id } };
     }
     _resolveToggleService(container, shouldRun) {
       const controlEntityId = container.control_entity || container.switch_entity;
@@ -1449,6 +1711,30 @@
         this.render();
       }
     }
+    /** Fires the recreate service after the inline confirm step has already been accepted. */
+    async _handleRecreate(container) {
+      const svcConfig = this._getRecreateService(container);
+      const displayName = container.name || this._friendlyName(container.status_entity || container.recreate_entity);
+      const key = this._containerKey(container);
+      this._recreateConfirming.delete(key);
+      if (!svcConfig) {
+        this._notify(this._t("notifications.missing_recreate", { name: displayName }));
+        this.render();
+        return;
+      }
+      this._pending.set(key, "recreate");
+      this.render();
+      try {
+        await this._callService(svcConfig);
+        this._notify(this._t("notifications.recreating", { name: displayName }));
+      } catch (err) {
+        console.error("docker-card recreate error", err);
+        this._notify(this._t("notifications.failed_recreate", { name: displayName }));
+      } finally {
+        this._pending.delete(key);
+        this.render();
+      }
+    }
     // ── Actions ──────────────────────────────────────────────────────────────
     _normalizeAction(action) {
       if (!action) return undefined;
@@ -1525,13 +1811,30 @@
       if (state === undefined || state === null || state === "unknown" || state === "unavailable") return "—";
       return state;
     }
-    _fmtPct(value) {
+    /** Formats an entity's state with its own unit_of_measurement appended (e.g. disk usage sensors in GB/MB). No unit is added when the entity declares none. */
+    _fmtStateWithUnit(entity) {
+      if (!entity) return "—";
+      const s = this._fmtState(entity.state);
+      if (s === "—") return s;
+      const unit = entity.attributes?.unit_of_measurement;
+      return unit ? `${s} ${unit}` : s;
+    }
+    /**
+     * Formats a CPU/memory entity's state using its own unit_of_measurement
+     * (falls back to "%" for entities that don't declare one) — so absolute
+     * sensors like memory in MB display correctly instead of being shown as
+     * a percentage.
+     */
+    _fmtResourceValue(entity) {
+      if (!entity) return null;
+      const value = entity.state;
       if (value === undefined || value === null) return null;
       const s = value.toString().toLowerCase();
       if (s === "unknown" || s === "unavailable" || s === "") return null;
       const n = parseFloat(value);
       if (isNaN(n)) return null;
-      return `${n.toFixed(1)}%`;
+      const unit = entity.attributes?.unit_of_measurement ?? "%";
+      return unit === "%" ? `${n.toFixed(1)}%` : `${n.toFixed(1)} ${unit}`;
     }
     _parseIntState(state) {
       if (state === undefined || state === null) return undefined;
