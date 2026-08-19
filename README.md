@@ -307,6 +307,9 @@ Clicking **Prune now** doesn't fire immediately — it swaps to an inline "Remov
 
 Pairs well with `image_disk_usage` in `docker_overview` — watch the number drop after a prune.
 
+> [!WARNING]
+> **Pruning may silently leave tagged-but-unused images behind — this is a known Portainer integration bug, not a card bug.** [home-assistant/core#179542](https://github.com/home-assistant/core/issues/179542) confirms the integration's `prune_images` action doesn't correctly pass its `dangling: false` filter to Portainer's API — calling Portainer's own API directly with the same parameters prunes correctly, so the bug is in the integration, not Portainer or this card. No fix as of this writing. If images you expect to be removed remain after pruning, this is why.
+
 ## Full example configuration
 Everything above, combined into one card:
 ```yaml
@@ -437,6 +440,7 @@ shell_command:
 | Update badge not showing | Verify WUD is running, the WUD Monitor integration is installed, and `update_entity` points to the correct sensor |
 | Scan button not working | Verify the WUD Monitor integration is installed and `wud_scan` points to the correct `button.*` entity |
 | Prune button not working | Verify `prune_images` points to a valid Portainer `button.*_prune_images` entity and that the Portainer integration is connected |
+| Pruning runs but tagged images stay behind | Known Portainer integration bug, not a card bug — see the warning in [Prune unused images](#prune-unused-images) ([home-assistant/core#179542](https://github.com/home-assistant/core/issues/179542)) |
 | Recreate button missing | Add `recreate_entity` pointing to the container's Portainer recreate `button.*` entity |
 | Recreate doesn't seem to update the container | Expected if the image tag is pinned (e.g. `:1.4.2`) — see the note in [Recreate container](#recreate-container). Only mutable tags like `:latest` actually change |
 | Disk usage tiles stuck on "—" / entity shows `unknown` | Known upstream Portainer/HA limitation, not a card bug — see the note under [docker_overview options](#docker_overview-options). `docker system df` is slow on overlay2 filesystems and can time out ([tracked upstream](https://github.com/home-assistant/core/issues/165617), closed as not planned) |
