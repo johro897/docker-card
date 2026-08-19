@@ -31,6 +31,7 @@ An extended version of Docker Card, inspired by [vineetchoudhary/lovelace-docker
 - **CPU / Memory sparkline graphs** — opt-in full-width history graphs per container with an adaptive time axis and day breaks, rendered as lightweight inline SVG from the Home Assistant history API; no extra dependencies
 - **WUD update tracking** — shows available updates with current → new version and how many days the update has been available (requires a running [What's Up Docker](https://github.com/getwud/wud) instance and the [WUD Monitor](https://github.com/johro897/wud-monitor) HA integration)
 - **WUD overview tiles** — shows last scan time and a one-click Force Scan button directly in the card overview
+- **Prune unused images** — one-click prune of unused Docker images via Portainer's own button entity, with an inline confirmation step before it runs
 - Theme-aware styling with configurable running / paused / not-running accent colors
 - Works out-of-the-box with entities from the Portainer integration; also supports any toggle-friendly domain (`switch`, `input_boolean`, `light`, etc.)
 - Optional tap/hold actions per container row for quick navigation, service calls, or external links
@@ -120,6 +121,7 @@ This walks through the minimum needed to see one real container on the card. It 
 | `operating_system_version` | Host OS version |
 | `wud_last_poll` | WUD Monitor sensor — shows timestamp of last WUD scan |
 | `wud_scan` | WUD Monitor button — click to trigger an immediate scan of all containers |
+| `prune_images` | Portainer's "Prune unused images" button — removes unused Docker images from the endpoint. Asks for confirmation before running. Shares one tile with `wud_scan` when both are set |
 
 ### Container options
 | Option | Required | Description |
@@ -268,6 +270,17 @@ Clicking **Scan now** calls `button.press` on the WUD Monitor Force Scan button.
 > [!NOTE]
 > Without the WUD Monitor integration, `update_entity`, `wud_last_poll`, and `wud_scan` have no effect — the rest of the card works normally.
 
+### Prune unused images
+Portainer's own [`button.*_prune_images`](https://www.home-assistant.io/integrations/portainer) entity removes unused Docker images from the endpoint. Add it as `prune_images` in `docker_overview`:
+```yaml
+docker_overview:
+  wud_scan: button.wud_wud_force_scan_all
+  prune_images: button.portainer_local_prune_images
+```
+When both `wud_scan` and `prune_images` are set they share one overview tile, split by a divider — the two maintenance actions live together instead of being scattered among the stat tiles. With only one of the two configured, it renders alone exactly as `wud_scan` always has.
+
+Clicking **Prune now** doesn't fire immediately — it swaps to an inline "Remove unused images?" confirmation with **Confirm** / **Cancel**, since this is a destructive action. Confirming calls `button.press` on the configured entity and shows "Pruning…" for 3 seconds.
+
 ## Full example configuration
 Everything above, combined into one card:
 ```yaml
@@ -392,14 +405,20 @@ shell_command:
 | Changed `graph_hours`, nothing happened | Hard-refresh the browser (`Ctrl/Cmd + Shift + R`). Also verify the option sits where you intended: on the card for a global default, or inside a container entry to override just that one |
 | Update badge not showing | Verify WUD is running, the WUD Monitor integration is installed, and `update_entity` points to the correct sensor |
 | Scan button not working | Verify the WUD Monitor integration is installed and `wud_scan` points to the correct `button.*` entity |
+| Prune button not working | Verify `prune_images` points to a valid Portainer `button.*_prune_images` entity and that the Portainer integration is connected |
 
 ## Changelog
 
-### 3.5
+### 3.6
 **Fix: `cpu_entity` / `memory_entity` now respect their own unit** — requested in #6
 - Values and graph labels now use the sensor's own `unit_of_measurement` (e.g. `MB`, `GB`) instead of always appending `%`
 - Falls back to `%` for sensors that don't declare a unit — no change for existing percentage-based setups
 - The graphs themselves were already unit-agnostic (auto-scaled to the actual data); only the text label was hardcoded
+
+**Prune unused images** — requested in #7
+- New `docker_overview.prune_images` option — Portainer's own prune-images button, exposed in the overview
+- Shares one tile with `wud_scan` when both are configured; renders alone otherwise
+- Asks for confirmation inline before running, since it's a destructive action
 
 ### 3.4
 **Resource graphs (CPU / Memory)** — requested in #3

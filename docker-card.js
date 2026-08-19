@@ -34,6 +34,13 @@
       os_aria: "Open operating system details",
       wud_last_poll_aria: "Open WUD last poll details",
       wud_scan_aria: "Trigger WUD scan now",
+      prune_images: "Prune Images",
+      prune_now: "Prune now",
+      prune_pending: "Pruning…",
+      prune_confirm_text: "Remove unused images?",
+      prune_confirm: "Confirm",
+      prune_cancel: "Cancel",
+      prune_aria: "Prune unused Docker images",
     },
     container: { image: "Image" },
     aria: {
@@ -70,6 +77,8 @@
       missing_resume: "No resume service configured for {name}.",
       wud_scan_triggered: "WUD scan triggered.",
       wud_scan_failed: "WUD scan failed.",
+      prune_triggered: "Prune started.",
+      prune_failed: "Prune failed.",
     },
     status: {
       online: "Online", offline: "Offline", idle: "Idle",
@@ -148,6 +157,8 @@
       this._listId = `dc-list-${cryptoRandom()}`;
       this._columns = 1;
       this._wudScanPending = false;
+      this._pruneConfirming = false;
+      this._prunePending = false;
       // History cache for sparkline graphs: entityId -> { points, fetchedAt, promise }
       this._history = new Map();
       this._renderQueued = false;
@@ -272,6 +283,40 @@
         .dc-ov-item.wud-scan:hover { border-color: var(--primary-color); }
         .dc-ov-item.wud-scan.pending { opacity: 0.5; cursor: progress; pointer-events: none; }
         .dc-ov-item.wud-scan:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
+        /* Maintenance tile: WUD scan + Prune images share one tile when both are configured */
+        .dc-ov-item.dc-maint { padding: 0; }
+        .dc-maint-row { display: flex; align-items: stretch; width: 100%; }
+        .dc-maint-half {
+          flex: 1 1 50%;
+          display: flex;
+          align-items: center;
+          gap: 0.55rem;
+          min-width: 0;
+          padding: 0.4rem 0.65rem;
+          cursor: pointer;
+        }
+        .dc-maint-half:hover { background: rgba(128,128,128,0.06); }
+        .dc-maint-half.pending { opacity: 0.5; cursor: progress; pointer-events: none; }
+        .dc-maint-half:focus-visible { outline: 2px solid var(--primary-color); outline-offset: -2px; }
+        .dc-maint-divider { width: 1px; background: var(--divider-color, rgba(128,128,128,0.2)); flex-shrink: 0; margin: 0.5rem 0; }
+        .dc-ov-badge.prune { background: rgba(46,143,87,0.14); color: var(--dc-rc, #2e8f57); }
+        .dc-ov-value.prune-action { color: var(--dc-rc, #2e8f57); font-size: 0.78rem; }
+        /* Inline confirm step (Prune) */
+        .dc-confirm-row { display: flex; align-items: center; gap: 0.35rem; font-size: 0.7rem; flex-wrap: wrap; }
+        .dc-confirm-text { color: var(--primary-text-color); white-space: nowrap; }
+        .dc-confirm-btn {
+          border: none; border-radius: 999px; font: inherit; font-size: 0.66rem; font-weight: 700;
+          padding: 0.2rem 0.55rem; cursor: pointer; white-space: nowrap;
+        }
+        .dc-confirm-btn.yes { background: var(--dc-nrc, #c22040); color: #fff; }
+        .dc-confirm-btn.no {
+          background: transparent; color: var(--secondary-text-color);
+          border: 1px solid var(--divider-color, rgba(128,128,128,0.3));
+        }
+        @media (max-width: 520px) {
+          .dc-maint-row { flex-direction: column; }
+          .dc-maint-divider { width: auto; height: 1px; margin: 0 0.65rem; }
+        }
         .dc-ov-badge {
           width: 1.9rem;
           height: 1.9rem;
@@ -728,7 +773,7 @@
           aria: this._t("overview.wud_last_poll_aria"),
         });
       }
-      if (!items.length && !oc.wud_scan) return "";
+      if (!items.length && !oc.wud_scan && !oc.prune_images) return "";
       let html = `<div class="dc-overview">`;
       html += items.map((item) => `
         <div class="dc-ov-item${item.entityId ? " actionable" : ""}"
@@ -741,25 +786,76 @@
               : `<div class="dc-ov-value${item.cls ? " " + item.cls : ""}">${this._esc(item.value)}</div>`}
           </div>
         </div>`).join("");
-      // WUD scan button tile
-      if (oc.wud_scan) {
-        const scanCls = this._wudScanPending ? " pending" : "";
+      // WUD scan + Prune images — share one tile when both are configured,
+      // otherwise each renders alone exactly as before.
+      if (oc.wud_scan && oc.prune_images) {
         html += `
-          <div class="dc-ov-item wud-scan${scanCls}"
-            role="button" tabindex="0"
-            aria-label="${this._t("overview.wud_scan_aria")}"
-            data-wud-scan="${this._esc(oc.wud_scan)}">
-            <div class="dc-ov-badge wud">
-              <ha-icon icon="mdi:refresh" style="--mdc-icon-size:1rem"></ha-icon>
-            </div>
-            <div class="dc-ov-text">
-              <div class="dc-ov-label">${this._t("overview.wud_scan")}</div>
-              <div class="dc-ov-value wud-action">${this._wudScanPending ? "Scanning…" : "Scan now"}</div>
+          <div class="dc-ov-item dc-maint">
+            <div class="dc-maint-row">
+              ${this._renderWudScanHalf(oc.wud_scan)}
+              <div class="dc-maint-divider"></div>
+              ${this._renderPruneHalf(oc.prune_images)}
             </div>
           </div>`;
+      } else if (oc.wud_scan) {
+        html += `<div class="dc-ov-item wud-scan${this._wudScanPending ? " pending" : ""}">${this._renderWudScanHalf(oc.wud_scan)}</div>`;
+      } else if (oc.prune_images) {
+        html += `<div class="dc-ov-item">${this._renderPruneHalf(oc.prune_images)}</div>`;
       }
       html += `</div>`;
       return html;
+    }
+    /** WUD scan content — identical markup whether shown standalone or as one half of the combined maintenance tile. */
+    _renderWudScanHalf(entityId) {
+      return `
+        <div class="dc-maint-half${this._wudScanPending ? " pending" : ""}"
+          role="button" tabindex="0"
+          aria-label="${this._t("overview.wud_scan_aria")}"
+          data-wud-scan="${this._esc(entityId)}">
+          <div class="dc-ov-badge wud">
+            <ha-icon icon="mdi:refresh" style="--mdc-icon-size:1rem"></ha-icon>
+          </div>
+          <div class="dc-ov-text">
+            <div class="dc-ov-label">${this._t("overview.wud_scan")}</div>
+            <div class="dc-ov-value wud-action">${this._wudScanPending ? "Scanning…" : "Scan now"}</div>
+          </div>
+        </div>`;
+    }
+    /** Prune content — idle → inline confirm → pending. Same markup standalone or combined. */
+    _renderPruneHalf(entityId) {
+      const badge = `<div class="dc-ov-badge prune"><ha-icon icon="mdi:broom" style="--mdc-icon-size:1rem"></ha-icon></div>`;
+      if (this._prunePending) {
+        return `
+          <div class="dc-maint-half pending">
+            ${badge}
+            <div class="dc-ov-text">
+              <div class="dc-ov-label">${this._t("overview.prune_images")}</div>
+              <div class="dc-ov-value prune-action">${this._t("overview.prune_pending")}</div>
+            </div>
+          </div>`;
+      }
+      if (this._pruneConfirming) {
+        return `
+          <div class="dc-maint-half" style="cursor:default">
+            ${badge}
+            <div class="dc-confirm-row">
+              <span class="dc-confirm-text">${this._t("overview.prune_confirm_text")}</span>
+              <button class="dc-confirm-btn yes" data-prune-confirm="${this._esc(entityId)}">${this._t("overview.prune_confirm")}</button>
+              <button class="dc-confirm-btn no" data-prune-cancel>${this._t("overview.prune_cancel")}</button>
+            </div>
+          </div>`;
+      }
+      return `
+        <div class="dc-maint-half"
+          role="button" tabindex="0"
+          aria-label="${this._t("overview.prune_aria")}"
+          data-prune-arm="${this._esc(entityId)}">
+          ${badge}
+          <div class="dc-ov-text">
+            <div class="dc-ov-label">${this._t("overview.prune_images")}</div>
+            <div class="dc-ov-value prune-action">${this._t("overview.prune_now")}</div>
+          </div>
+        </div>`;
     }
     _renderSection() {
       const expanded = this._expanded;
@@ -1148,6 +1244,34 @@
         el.addEventListener("keydown", (e) => {
           if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handler(); }
         });
+      });
+      // Prune images — arm the inline confirm step, cancel it, or actually run it.
+      this.querySelectorAll("[data-prune-arm]").forEach((el) => {
+        const arm = () => { this._pruneConfirming = true; this.render(); };
+        el.addEventListener("click", arm);
+        el.addEventListener("keydown", (e) => {
+          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); arm(); }
+        });
+      });
+      this.querySelector("[data-prune-cancel]")?.addEventListener("click", () => {
+        this._pruneConfirming = false;
+        this.render();
+      });
+      this.querySelector("[data-prune-confirm]")?.addEventListener("click", async (e) => {
+        const entityId = e.currentTarget.dataset.pruneConfirm;
+        if (this._prunePending || !entityId || !this._hass) return;
+        this._pruneConfirming = false;
+        this._prunePending = true;
+        this.render();
+        try {
+          await this._hass.callService("button", "press", { entity_id: entityId });
+          this._notify(this._t("notifications.prune_triggered"));
+        } catch (err) {
+          console.error("docker-card: prune failed", err);
+          this._notify(this._t("notifications.prune_failed"));
+        } finally {
+          setTimeout(() => { this._prunePending = false; this.render(); }, 3000);
+        }
       });
       this.querySelectorAll("ha-switch[data-key]").forEach((sw) => {
         sw.addEventListener("change", (e) => {
