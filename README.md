@@ -122,12 +122,15 @@ This walks through the minimum needed to see one real container on the card. It 
 | `image_count` | Number of Docker images |
 | `operating_system` | Host OS name |
 | `operating_system_version` | Host OS version |
-| `container_disk_usage` | Portainer sensor — total disk space used by containers |
-| `image_disk_usage` | Portainer sensor — total disk space used by images |
-| `volume_disk_usage` | Portainer sensor — total disk space used by volumes |
+| `container_disk_usage` | Portainer sensor — total disk space used by containers. See note below if it stays `unknown` |
+| `image_disk_usage` | Portainer sensor — total disk space used by images. See note below if it stays `unknown` |
+| `volume_disk_usage` | Portainer sensor — total disk space used by volumes. See note below if it stays `unknown` |
 | `wud_last_poll` | WUD Monitor sensor — shows timestamp of last WUD scan |
 | `wud_scan` | WUD Monitor button — click to trigger an immediate scan of all containers |
 | `prune_images` | Portainer's "Prune unused images" button — removes unused Docker images from the endpoint. Asks for confirmation before running. Shares one tile with `wud_scan` when both are set |
+
+> [!NOTE]
+> **If `container_disk_usage` / `image_disk_usage` / `volume_disk_usage` stay stuck on `unknown`, this is a known Portainer/Home Assistant limitation, not a card bug.** These sensors are populated via Docker's `docker system df` command, which is [documented to be slow on overlay2 filesystems](https://github.com/home-assistant/core/issues/165617) — common on Linux and NAS Docker hosts. If it exceeds the integration's timeout, those specific sensors stay `unknown` while the rest of the integration keeps working normally. Home Assistant closed the upstream issue as "not planned," so there's currently no fix on their side either. You can confirm this is the cause by running `time docker system df` on your Docker host — if it takes more than a few seconds, that's why.
 
 ### Container options
 | Option | Required | Description |
@@ -436,6 +439,7 @@ shell_command:
 | Prune button not working | Verify `prune_images` points to a valid Portainer `button.*_prune_images` entity and that the Portainer integration is connected |
 | Recreate button missing | Add `recreate_entity` pointing to the container's Portainer recreate `button.*` entity |
 | Recreate doesn't seem to update the container | Expected if the image tag is pinned (e.g. `:1.4.2`) — see the note in [Recreate container](#recreate-container). Only mutable tags like `:latest` actually change |
+| Disk usage tiles stuck on "—" / entity shows `unknown` | Known upstream Portainer/HA limitation, not a card bug — see the note under [docker_overview options](#docker_overview-options). `docker system df` is slow on overlay2 filesystems and can time out ([tracked upstream](https://github.com/home-assistant/core/issues/165617), closed as not planned) |
 
 ## Changelog
 
