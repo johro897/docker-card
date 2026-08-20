@@ -453,6 +453,13 @@ shell_command:
 
 ## Changelog
 
+### 3.10
+**Accessibility & theming** — [#15](https://github.com/johro897/docker-card-extended/issues/15)
+- Keyboard focus is now restored to the Cancel button after arming the Prune/Recreate confirm step, and back to the original button after cancelling — previously the re-render dropped focus to the page body
+- Container rows with a `tap_action` now respond to Space, not just Enter, matching every other keyboard-operable control in the card
+- The container start/stop toggle now has an `aria-label` naming both the action and the container, not just a `title` attribute
+- The update badge and container health icon now use the same theme-variable colors as the rest of the card (`running_color`/`not_running_color`/`paused_color`) instead of fixed hex values
+
 ### 3.6
 **Fix: `cpu_entity` / `memory_entity` now respect their own unit** — requested in #6
 - Values and graph labels now use the sensor's own `unit_of_measurement` (e.g. `MB`, `GB`) instead of always appending `%`
