@@ -453,7 +453,7 @@ shell_command:
 
 ## Changelog
 
-### 3.7
+### 3.8
 **Security hardening** — [#13](https://github.com/johro897/docker-card-extended/issues/13)
 - The release-notes link now validates the URL scheme before rendering — only `http(s)` links are shown, blocking anything WUD could theoretically supply via a `javascript:`/`data:` value
 - Container identifiers used in internal action attributes (start/stop, restart, pause/resume, recreate) are now HTML-escaped consistently with the rest of the card
