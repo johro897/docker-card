@@ -986,8 +986,9 @@
       const daysHtml = (daysAvailable !== null && daysAvailable !== undefined)
         ? `<span class="dc-update-days">${daysAvailable}${this._t("update.days")}</span>`
         : "";
-      const linkHtml = releaseNotes ? `
-          <a class="dc-update-link" href="${this._esc(releaseNotes)}" target="_blank" rel="noreferrer" title="${this._t("update.release_notes")}">
+      const safeReleaseNotesUrl = this._safeHttpUrl(releaseNotes);
+      const linkHtml = safeReleaseNotesUrl ? `
+          <a class="dc-update-link" href="${this._esc(safeReleaseNotesUrl)}" target="_blank" rel="noreferrer" title="${this._t("update.release_notes")}">
             <ha-icon icon="mdi:open-in-new" style="--mdc-icon-size:0.68rem"></ha-icon>
           </a>` : "";
       return `
@@ -1198,6 +1199,7 @@
     // ── Row render ────────────────────────────────────────────────────────────
     _renderRow(c) {
       const key = this._containerKey(c);
+      const escKey = this._esc(key);
       const si = this._containerStatus(c);
       const pending = this._pending.has(key);
       const rc = c.running_color || this.config.running_color;
@@ -1259,7 +1261,7 @@
       const pauseBtnTitle = si.isPaused ? this._t("actions.resume_container") : this._t("actions.pause_container");
       const pauseBtnDisabled = !si.canPause || pending;
       const pauseBtnHtml = showPauseBtn
-        ? `<button class="dc-pause" data-key="${key}" data-pause-action="${si.isPaused ? "resume" : "pause"}"
+        ? `<button class="dc-pause" data-key="${escKey}" data-pause-action="${si.isPaused ? "resume" : "pause"}"
             ${pauseBtnDisabled ? "disabled" : ""}
             title="${pauseBtnTitle}">
             ${pauseBtnLabel}
@@ -1274,12 +1276,12 @@
           recreateHtml = `
             <span class="dc-confirm-row">
               <span class="dc-confirm-text">${this._t("actions.recreate_confirm_text")}</span>
-              <button class="dc-confirm-btn yes" data-recreate-confirm="${key}">${this._t("actions.confirm")}</button>
-              <button class="dc-confirm-btn no" data-recreate-cancel="${key}">${this._t("actions.cancel")}</button>
+              <button class="dc-confirm-btn yes" data-recreate-confirm="${escKey}">${this._t("actions.confirm")}</button>
+              <button class="dc-confirm-btn no" data-recreate-cancel="${escKey}">${this._t("actions.cancel")}</button>
             </span>`;
         } else {
           recreateHtml = `
-            <button class="dc-recreate" data-recreate-arm="${key}" ${pending ? "disabled" : ""}
+            <button class="dc-recreate" data-recreate-arm="${escKey}" ${pending ? "disabled" : ""}
               title="${this._t("actions.recreate_container")}">
               ${pending && this._pending.get(key) === "recreate" ? this._t("actions.recreating") : this._t("actions.recreate")}
             </button>`;
@@ -1287,7 +1289,7 @@
       }
       return `
         <div class="dc-row ${si.cssClass}${pending ? " pending" : ""}${isActionable ? " actionable" : ""}"
-          data-key="${key}"
+          data-key="${escKey}"
           style="--dc-rc:${rc};--dc-nrc:${nrc};--dc-pc:${pc}"
           ${isActionable ? `role="button" tabindex="0" aria-label="${name}"` : ""}>
           <div class="dc-info">
@@ -1301,13 +1303,13 @@
             ${updateHtml}
           </div>
           <div class="dc-actions">
-            <ha-switch data-key="${key}"
+            <ha-switch data-key="${escKey}"
               ${si.isRunning ? "checked" : ""}
               ${!si.canToggle || pending || si.isPaused ? "disabled" : ""}
               title="${si.isRunning ? this._t("actions.stop_container") : this._t("actions.start_container")}">
             </ha-switch>
             ${pauseBtnHtml}
-            <button class="dc-restart" data-key="${key}" ${!si.canRestart || pending ? "disabled" : ""}>
+            <button class="dc-restart" data-key="${escKey}" ${!si.canRestart || pending ? "disabled" : ""}>
               ${this._t("actions.restart")}
             </button>
             ${recreateHtml}
@@ -1859,6 +1861,16 @@
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;");
+    }
+    /** Only allow http(s) URLs through to an href — blocks javascript:/data: etc. from untrusted attribute values. */
+    _safeHttpUrl(url) {
+      if (!url) return "";
+      try {
+        const parsed = new URL(String(url), window.location.href);
+        return /^https?:$/.test(parsed.protocol) ? String(url) : "";
+      } catch {
+        return "";
+      }
     }
     // ── Translations ──────────────────────────────────────────────────────────
     _t(key, replacements) {
