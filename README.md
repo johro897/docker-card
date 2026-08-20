@@ -453,6 +453,11 @@ shell_command:
 
 ## Changelog
 
+### 3.9
+**Performance: dirty-check in the `hass` setter** — [#14](https://github.com/johro897/docker-card-extended/issues/14)
+- The card now only re-renders when something it actually watches (an overview entity or one of a container's configured entities) changes state or attributes — previously every single Home Assistant state change, anywhere in the install, triggered a full re-render of this card
+- No visible behavior change; the card should feel the same, just lighter on larger installs and with graphs enabled
+
 ### 3.6
 **Fix: `cpu_entity` / `memory_entity` now respect their own unit** — requested in #6
 - Values and graph labels now use the sensor's own `unit_of_measurement` (e.g. `MB`, `GB`) instead of always appending `%`
