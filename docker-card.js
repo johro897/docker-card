@@ -225,7 +225,12 @@
       this.render();
     }
     connectedCallback() { this.render(); }
-    set hass(hass) { this._hass = hass; this.render(); }
+    set hass(hass) {
+      const prevHass = this._hass;
+      const dirty = this._isDirty(prevHass, hass);
+      this._hass = hass;
+      if (dirty) this.render();
+    }
     getCardSize() { return 4; }
     // ── CSS ──────────────────────────────────────────────────────────────────
     _css() {
@@ -1795,6 +1800,39 @@
     _getEntity(entityId) {
       if (!entityId || !this._hass?.states) return undefined;
       return this._hass.states[entityId];
+    }
+    /** Every entity ID the currently-rendered card actually reads, derived fresh from config each call. */
+    _watchedEntities() {
+      const ids = new Set();
+      const oc = this.config?.docker_overview;
+      if (oc && typeof oc === "object") {
+        Object.values(oc).forEach((v) => { if (typeof v === "string" && v) ids.add(v); });
+      }
+      const containerEntityFields = [
+        "status_entity", "control_entity", "switch_entity",
+        "restart_entity", "pause_entity", "resume_entity", "recreate_entity",
+        "cpu_entity", "memory_entity", "image_version_entity", "health_entity",
+        "update_entity",
+      ];
+      (this.config?.containers || []).forEach((c) => {
+        containerEntityFields.forEach((f) => { if (c[f]) ids.add(c[f]); });
+      });
+      return ids;
+    }
+    /**
+     * True if anything the card actually reads from hass changed since prevHass.
+     * Relies on HA's frontend guarantee that hass.states[id] keeps the same object
+     * reference unless that specific entity's state/attributes actually changed —
+     * so a reference check is sufficient, no need to diff state/attributes by value.
+     */
+    _isDirty(prevHass, hass) {
+      if (!prevHass || !hass) return true;
+      if (prevHass.language !== hass.language || prevHass.selectedLanguage !== hass.selectedLanguage) return true;
+      if (prevHass.locale !== hass.locale) return true;
+      for (const id of this._watchedEntities()) {
+        if (prevHass.states?.[id] !== hass.states?.[id]) return true;
+      }
+      return false;
     }
     _friendlyName(entityId) {
       const e = this._getEntity(entityId);
