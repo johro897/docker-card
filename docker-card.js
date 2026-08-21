@@ -339,6 +339,7 @@
           background: transparent; color: var(--secondary-text-color);
           border: 1px solid var(--divider-color, rgba(128,128,128,0.3));
         }
+        .dc-confirm-btn:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
         @media (max-width: 520px) {
           .dc-maint-row { flex-direction: column; }
           .dc-maint-divider { width: auto; height: 1px; margin: 0 0.65rem; }
@@ -670,6 +671,7 @@
         .dc-restart:hover  { border-color: var(--primary-color); color: var(--primary-color); }
         .dc-restart:active { background: var(--primary-color); color: #fff; border-color: var(--primary-color); }
         .dc-restart:disabled { opacity: 0.5; cursor: not-allowed; }
+        .dc-restart:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
         /* Pause / Resume button — amber accent to match paused state */
         .dc-pause {
           border: 1px solid var(--divider-color, rgba(128,128,128,0.3));
@@ -686,6 +688,7 @@
         .dc-pause:hover  { border-color: var(--dc-pc); color: var(--dc-pc); }
         .dc-pause:active { background: var(--dc-pc); color: #fff; border-color: var(--dc-pc); }
         .dc-pause:disabled { opacity: 0.5; cursor: not-allowed; }
+        .dc-pause:focus-visible { outline: 2px solid var(--dc-pc); outline-offset: 2px; }
         /* Recreate button — teal-ish accent, distinct from the neutral Restart/Pause pills */
         .dc-recreate {
           border: 1px solid rgba(46,143,87,0.4);
@@ -697,7 +700,9 @@
         }
         .dc-recreate:hover { background: rgba(46,143,87,0.16); }
         .dc-recreate:disabled { opacity: 0.5; cursor: not-allowed; }
+        .dc-recreate:focus-visible { outline: 2px solid var(--dc-rc, #2e8f57); outline-offset: 2px; }
         ha-switch[disabled] { opacity: 0.5; }
+        ha-switch:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; border-radius: 8px; }
         .dc-empty {
           font-size: 0.82rem;
           color: var(--secondary-text-color);
