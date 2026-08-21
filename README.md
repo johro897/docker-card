@@ -453,6 +453,22 @@ shell_command:
 
 ## Changelog
 
+### 3.7
+**Security hardening** — [#13](https://github.com/johro897/docker-card-extended/issues/13)
+- The release-notes link now validates the URL scheme before rendering — only `http(s)` links are shown, blocking anything WUD could theoretically supply via a `javascript:`/`data:` value
+- Container identifiers used in internal action attributes (start/stop, restart, pause/resume, recreate) are now HTML-escaped consistently with the rest of the card
+
+**Performance: dirty-check in the `hass` setter** — [#14](https://github.com/johro897/docker-card-extended/issues/14)
+- The card now only re-renders when something it actually watches (an overview entity or one of a container's configured entities) changes state or attributes — previously every single Home Assistant state change, anywhere in the install, triggered a full re-render of this card
+- No visible behavior change; the card should feel the same, just lighter on larger installs and with graphs enabled
+
+**Accessibility & theming** — [#15](https://github.com/johro897/docker-card-extended/issues/15)
+- Keyboard focus is now restored to the Cancel button after arming the Prune/Recreate confirm step, and back to the original button after cancelling — previously the re-render dropped focus to the page body, and with #14 not yet applied the frequent re-renders could also drop focus mid-interaction
+- Container rows with a `tap_action` now respond to Space, not just Enter, matching every other keyboard-operable control in the card
+- The container start/stop toggle now has an `aria-label` naming both the action and the container, not just a `title` attribute
+- The update badge and container health icon now use the same theme-variable colors as the rest of the card (`running_color`/`not_running_color`/`paused_color`) instead of fixed hex values
+- Added `:focus-visible` outlines to the Prune/Recreate Confirm/Cancel buttons, Restart, Pause, Recreate, and the container toggle switch — this card renders into light DOM rather than a Shadow DOM like the rest of this project's cards, so it has no isolation from the dashboard theme's own focus handling and needed these explicitly
+
 ### 3.6
 **Fix: `cpu_entity` / `memory_entity` now respect their own unit** — requested in #6
 - Values and graph labels now use the sensor's own `unit_of_measurement` (e.g. `MB`, `GB`) instead of always appending `%`

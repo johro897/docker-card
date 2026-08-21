@@ -184,6 +184,10 @@
       // History cache for sparkline graphs: entityId -> { points, fetchedAt, promise }
       this._history = new Map();
       this._renderQueued = false;
+      // CSS selector for the element to focus after the next render() call —
+      // set by a handler right before a keyboard-triggered state change that
+      // will tear down and rebuild innerHTML, so focus isn't dropped to <body>.
+      this._pendingFocusSelector = null;
     }
     setConfig(config) {
       if (!config) throw new Error("Missing configuration for docker-card");
@@ -225,7 +229,12 @@
       this.render();
     }
     connectedCallback() { this.render(); }
-    set hass(hass) { this._hass = hass; this.render(); }
+    set hass(hass) {
+      const prevHass = this._hass;
+      const dirty = this._isDirty(prevHass, hass);
+      this._hass = hass;
+      if (dirty) this.render();
+    }
     getCardSize() { return 4; }
     // ── CSS ──────────────────────────────────────────────────────────────────
     _css() {
@@ -335,6 +344,7 @@
           background: transparent; color: var(--secondary-text-color);
           border: 1px solid var(--divider-color, rgba(128,128,128,0.3));
         }
+        .dc-confirm-btn:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
         @media (max-width: 520px) {
           .dc-maint-row { flex-direction: column; }
           .dc-maint-divider { width: auto; height: 1px; margin: 0 0.65rem; }
@@ -607,7 +617,7 @@
           width: 0.45rem;
           height: 0.45rem;
           border-radius: 50%;
-          background: #f4b942;
+          background: var(--dc-pc, #f4b942);
           flex-shrink: 0;
         }
         .dc-update-text {
@@ -618,7 +628,7 @@
           text-overflow: ellipsis;
         }
         .dc-update-arrow {
-          color: #f4b942;
+          color: var(--dc-pc, #f4b942);
           font-size: 0.68rem;
           flex-shrink: 0;
         }
@@ -632,7 +642,7 @@
           display: inline-flex;
           align-items: center;
           justify-content: center;
-          color: #f4b942;
+          color: var(--dc-pc, #f4b942);
           flex-shrink: 0;
           text-decoration: none;
           opacity: 0.85;
@@ -643,7 +653,7 @@
           background: rgba(194, 32, 64, 0.1);
           border-color: rgba(194, 32, 64, 0.35);
         }
-        .dc-update-dot.error { background: #c22040; }
+        .dc-update-dot.error { background: var(--dc-nrc, #c22040); }
         .dc-actions {
           display: flex;
           align-items: center;
@@ -666,6 +676,7 @@
         .dc-restart:hover  { border-color: var(--primary-color); color: var(--primary-color); }
         .dc-restart:active { background: var(--primary-color); color: #fff; border-color: var(--primary-color); }
         .dc-restart:disabled { opacity: 0.5; cursor: not-allowed; }
+        .dc-restart:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
         /* Pause / Resume button — amber accent to match paused state */
         .dc-pause {
           border: 1px solid var(--divider-color, rgba(128,128,128,0.3));
@@ -682,6 +693,7 @@
         .dc-pause:hover  { border-color: var(--dc-pc); color: var(--dc-pc); }
         .dc-pause:active { background: var(--dc-pc); color: #fff; border-color: var(--dc-pc); }
         .dc-pause:disabled { opacity: 0.5; cursor: not-allowed; }
+        .dc-pause:focus-visible { outline: 2px solid var(--dc-pc); outline-offset: 2px; }
         /* Recreate button — teal-ish accent, distinct from the neutral Restart/Pause pills */
         .dc-recreate {
           border: 1px solid rgba(46,143,87,0.4);
@@ -693,7 +705,9 @@
         }
         .dc-recreate:hover { background: rgba(46,143,87,0.16); }
         .dc-recreate:disabled { opacity: 0.5; cursor: not-allowed; }
+        .dc-recreate:focus-visible { outline: 2px solid var(--dc-rc, #2e8f57); outline-offset: 2px; }
         ha-switch[disabled] { opacity: 0.5; }
+        ha-switch:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; border-radius: 8px; }
         .dc-empty {
           font-size: 0.82rem;
           color: var(--secondary-text-color);
@@ -745,6 +759,15 @@
         </div>
       `;
       this._bindEvents();
+      this._restorePendingFocus();
+    }
+    /** Focuses the element matching _pendingFocusSelector (set by a handler just before render()), if any. */
+    _restorePendingFocus() {
+      if (!this._pendingFocusSelector) return;
+      const selector = this._pendingFocusSelector;
+      this._pendingFocusSelector = null;
+      const el = this.querySelector(selector);
+      if (el) el.focus();
     }
     // ── Overview ─────────────────────────────────────────────────────────────
     _renderOverview() {
@@ -986,8 +1009,9 @@
       const daysHtml = (daysAvailable !== null && daysAvailable !== undefined)
         ? `<span class="dc-update-days">${daysAvailable}${this._t("update.days")}</span>`
         : "";
-      const linkHtml = releaseNotes ? `
-          <a class="dc-update-link" href="${this._esc(releaseNotes)}" target="_blank" rel="noreferrer" title="${this._t("update.release_notes")}">
+      const safeReleaseNotesUrl = this._safeHttpUrl(releaseNotes);
+      const linkHtml = safeReleaseNotesUrl ? `
+          <a class="dc-update-link" href="${this._esc(safeReleaseNotesUrl)}" target="_blank" rel="noreferrer" title="${this._t("update.release_notes")}">
             <ha-icon icon="mdi:open-in-new" style="--mdc-icon-size:0.68rem"></ha-icon>
           </a>` : "";
       return `
@@ -1198,6 +1222,7 @@
     // ── Row render ────────────────────────────────────────────────────────────
     _renderRow(c) {
       const key = this._containerKey(c);
+      const escKey = this._esc(key);
       const si = this._containerStatus(c);
       const pending = this._pending.has(key);
       const rc = c.running_color || this.config.running_color;
@@ -1213,9 +1238,9 @@
         const hv = he?.state?.toLowerCase();
         if (hv && hv !== "unknown" && hv !== "unavailable") {
           const iconMap = {
-            healthy:   { icon: "mdi:heart-pulse",     color: "#2e8f57" },
-            unhealthy: { icon: "mdi:heart-broken",    color: "#c22040" },
-            starting:  { icon: "mdi:heart-half-full", color: "#f4b942" },
+            healthy:   { icon: "mdi:heart-pulse",     color: "var(--dc-rc, #2e8f57)" },
+            unhealthy: { icon: "mdi:heart-broken",    color: "var(--dc-nrc, #c22040)" },
+            starting:  { icon: "mdi:heart-half-full", color: "var(--dc-pc, #f4b942)" },
           };
           const cfg = iconMap[hv] ?? { icon: "mdi:help-circle-outline", color: "gray" };
           healthHtml = `<ha-icon icon="${cfg.icon}" style="--mdc-icon-size:0.85rem;color:${cfg.color};flex-shrink:0"></ha-icon>`;
@@ -1259,7 +1284,7 @@
       const pauseBtnTitle = si.isPaused ? this._t("actions.resume_container") : this._t("actions.pause_container");
       const pauseBtnDisabled = !si.canPause || pending;
       const pauseBtnHtml = showPauseBtn
-        ? `<button class="dc-pause" data-key="${key}" data-pause-action="${si.isPaused ? "resume" : "pause"}"
+        ? `<button class="dc-pause" data-key="${escKey}" data-pause-action="${si.isPaused ? "resume" : "pause"}"
             ${pauseBtnDisabled ? "disabled" : ""}
             title="${pauseBtnTitle}">
             ${pauseBtnLabel}
@@ -1274,12 +1299,12 @@
           recreateHtml = `
             <span class="dc-confirm-row">
               <span class="dc-confirm-text">${this._t("actions.recreate_confirm_text")}</span>
-              <button class="dc-confirm-btn yes" data-recreate-confirm="${key}">${this._t("actions.confirm")}</button>
-              <button class="dc-confirm-btn no" data-recreate-cancel="${key}">${this._t("actions.cancel")}</button>
+              <button class="dc-confirm-btn yes" data-recreate-confirm="${escKey}">${this._t("actions.confirm")}</button>
+              <button class="dc-confirm-btn no" data-recreate-cancel="${escKey}">${this._t("actions.cancel")}</button>
             </span>`;
         } else {
           recreateHtml = `
-            <button class="dc-recreate" data-recreate-arm="${key}" ${pending ? "disabled" : ""}
+            <button class="dc-recreate" data-recreate-arm="${escKey}" ${pending ? "disabled" : ""}
               title="${this._t("actions.recreate_container")}">
               ${pending && this._pending.get(key) === "recreate" ? this._t("actions.recreating") : this._t("actions.recreate")}
             </button>`;
@@ -1287,7 +1312,7 @@
       }
       return `
         <div class="dc-row ${si.cssClass}${pending ? " pending" : ""}${isActionable ? " actionable" : ""}"
-          data-key="${key}"
+          data-key="${escKey}"
           style="--dc-rc:${rc};--dc-nrc:${nrc};--dc-pc:${pc}"
           ${isActionable ? `role="button" tabindex="0" aria-label="${name}"` : ""}>
           <div class="dc-info">
@@ -1301,13 +1326,14 @@
             ${updateHtml}
           </div>
           <div class="dc-actions">
-            <ha-switch data-key="${key}"
+            <ha-switch data-key="${escKey}"
               ${si.isRunning ? "checked" : ""}
               ${!si.canToggle || pending || si.isPaused ? "disabled" : ""}
-              title="${si.isRunning ? this._t("actions.stop_container") : this._t("actions.start_container")}">
+              title="${si.isRunning ? this._t("actions.stop_container") : this._t("actions.start_container")}"
+              aria-label="${si.isRunning ? this._t("actions.stop_container") : this._t("actions.start_container")} ${name}">
             </ha-switch>
             ${pauseBtnHtml}
-            <button class="dc-restart" data-key="${key}" ${!si.canRestart || pending ? "disabled" : ""}>
+            <button class="dc-restart" data-key="${escKey}" ${!si.canRestart || pending ? "disabled" : ""}>
               ${this._t("actions.restart")}
             </button>
             ${recreateHtml}
@@ -1353,7 +1379,11 @@
       });
       // Prune images — arm the inline confirm step, cancel it, or actually run it.
       this.querySelectorAll("[data-prune-arm]").forEach((el) => {
-        const arm = () => { this._pruneConfirming = true; this.render(); };
+        const arm = () => {
+          this._pruneConfirming = true;
+          this._pendingFocusSelector = "[data-prune-cancel]";
+          this.render();
+        };
         el.addEventListener("click", arm);
         el.addEventListener("keydown", (e) => {
           if (e.key === "Enter" || e.key === " ") { e.preventDefault(); arm(); }
@@ -1361,6 +1391,7 @@
       });
       this.querySelector("[data-prune-cancel]")?.addEventListener("click", () => {
         this._pruneConfirming = false;
+        this._pendingFocusSelector = "[data-prune-arm]";
         this.render();
       });
       this.querySelector("[data-prune-confirm]")?.addEventListener("click", async (e) => {
@@ -1382,12 +1413,20 @@
       // Recreate container — same arm / cancel / confirm pattern as Prune, keyed per container.
       this.querySelectorAll("[data-recreate-arm]").forEach((el) => {
         const key = el.dataset.recreateArm;
-        const arm = () => { this._recreateConfirming.add(key); this.render(); };
+        const arm = () => {
+          this._recreateConfirming.add(key);
+          this._pendingFocusSelector = `[data-recreate-cancel="${CSS.escape(key)}"]`;
+          this.render();
+        };
         el.addEventListener("click", arm);
       });
       this.querySelectorAll("[data-recreate-cancel]").forEach((el) => {
         const key = el.dataset.recreateCancel;
-        el.addEventListener("click", () => { this._recreateConfirming.delete(key); this.render(); });
+        el.addEventListener("click", () => {
+          this._recreateConfirming.delete(key);
+          this._pendingFocusSelector = `[data-recreate-arm="${CSS.escape(key)}"]`;
+          this.render();
+        });
       });
       this.querySelectorAll("[data-recreate-confirm]").forEach((el) => {
         const key = el.dataset.recreateConfirm;
@@ -1447,7 +1486,8 @@
           if (tapAction) this._handleAction(tapAction, defaultEntity);
         });
         row.addEventListener("keydown", (e) => {
-          if (e.key === "Enter" && tapAction) { e.preventDefault(); this._handleAction(tapAction, defaultEntity); }
+          if (this._isInteractive(e)) return;
+          if ((e.key === "Enter" || e.key === " ") && tapAction) { e.preventDefault(); this._handleAction(tapAction, defaultEntity); }
         });
       });
     }
@@ -1794,6 +1834,39 @@
       if (!entityId || !this._hass?.states) return undefined;
       return this._hass.states[entityId];
     }
+    /** Every entity ID the currently-rendered card actually reads, derived fresh from config each call. */
+    _watchedEntities() {
+      const ids = new Set();
+      const oc = this.config?.docker_overview;
+      if (oc && typeof oc === "object") {
+        Object.values(oc).forEach((v) => { if (typeof v === "string" && v) ids.add(v); });
+      }
+      const containerEntityFields = [
+        "status_entity", "control_entity", "switch_entity",
+        "restart_entity", "pause_entity", "resume_entity", "recreate_entity",
+        "cpu_entity", "memory_entity", "image_version_entity", "health_entity",
+        "update_entity",
+      ];
+      (this.config?.containers || []).forEach((c) => {
+        containerEntityFields.forEach((f) => { if (c[f]) ids.add(c[f]); });
+      });
+      return ids;
+    }
+    /**
+     * True if anything the card actually reads from hass changed since prevHass.
+     * Relies on HA's frontend guarantee that hass.states[id] keeps the same object
+     * reference unless that specific entity's state/attributes actually changed —
+     * so a reference check is sufficient, no need to diff state/attributes by value.
+     */
+    _isDirty(prevHass, hass) {
+      if (!prevHass || !hass) return true;
+      if (prevHass.language !== hass.language || prevHass.selectedLanguage !== hass.selectedLanguage) return true;
+      if (prevHass.locale !== hass.locale) return true;
+      for (const id of this._watchedEntities()) {
+        if (prevHass.states?.[id] !== hass.states?.[id]) return true;
+      }
+      return false;
+    }
     _friendlyName(entityId) {
       const e = this._getEntity(entityId);
       return e?.attributes?.friendly_name || entityId || this._t("common.container");
@@ -1859,6 +1932,16 @@
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;");
+    }
+    /** Only allow http(s) URLs through to an href — blocks javascript:/data: etc. from untrusted attribute values. */
+    _safeHttpUrl(url) {
+      if (!url) return "";
+      try {
+        const parsed = new URL(String(url), window.location.href);
+        return /^https?:$/.test(parsed.protocol) ? String(url) : "";
+      } catch {
+        return "";
+      }
     }
     // ── Translations ──────────────────────────────────────────────────────────
     _t(key, replacements) {
