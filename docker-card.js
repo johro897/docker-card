@@ -184,6 +184,10 @@
       // History cache for sparkline graphs: entityId -> { points, fetchedAt, promise }
       this._history = new Map();
       this._renderQueued = false;
+      // CSS selector for the element to focus after the next render() call —
+      // set by a handler right before a keyboard-triggered state change that
+      // will tear down and rebuild innerHTML, so focus isn't dropped to <body>.
+      this._pendingFocusSelector = null;
     }
     setConfig(config) {
       if (!config) throw new Error("Missing configuration for docker-card");
@@ -340,6 +344,7 @@
           background: transparent; color: var(--secondary-text-color);
           border: 1px solid var(--divider-color, rgba(128,128,128,0.3));
         }
+        .dc-confirm-btn:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
         @media (max-width: 520px) {
           .dc-maint-row { flex-direction: column; }
           .dc-maint-divider { width: auto; height: 1px; margin: 0 0.65rem; }
@@ -612,7 +617,7 @@
           width: 0.45rem;
           height: 0.45rem;
           border-radius: 50%;
-          background: #f4b942;
+          background: var(--dc-pc, #f4b942);
           flex-shrink: 0;
         }
         .dc-update-text {
@@ -623,7 +628,7 @@
           text-overflow: ellipsis;
         }
         .dc-update-arrow {
-          color: #f4b942;
+          color: var(--dc-pc, #f4b942);
           font-size: 0.68rem;
           flex-shrink: 0;
         }
@@ -637,7 +642,7 @@
           display: inline-flex;
           align-items: center;
           justify-content: center;
-          color: #f4b942;
+          color: var(--dc-pc, #f4b942);
           flex-shrink: 0;
           text-decoration: none;
           opacity: 0.85;
@@ -648,7 +653,7 @@
           background: rgba(194, 32, 64, 0.1);
           border-color: rgba(194, 32, 64, 0.35);
         }
-        .dc-update-dot.error { background: #c22040; }
+        .dc-update-dot.error { background: var(--dc-nrc, #c22040); }
         .dc-actions {
           display: flex;
           align-items: center;
@@ -671,6 +676,7 @@
         .dc-restart:hover  { border-color: var(--primary-color); color: var(--primary-color); }
         .dc-restart:active { background: var(--primary-color); color: #fff; border-color: var(--primary-color); }
         .dc-restart:disabled { opacity: 0.5; cursor: not-allowed; }
+        .dc-restart:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
         /* Pause / Resume button — amber accent to match paused state */
         .dc-pause {
           border: 1px solid var(--divider-color, rgba(128,128,128,0.3));
@@ -687,6 +693,7 @@
         .dc-pause:hover  { border-color: var(--dc-pc); color: var(--dc-pc); }
         .dc-pause:active { background: var(--dc-pc); color: #fff; border-color: var(--dc-pc); }
         .dc-pause:disabled { opacity: 0.5; cursor: not-allowed; }
+        .dc-pause:focus-visible { outline: 2px solid var(--dc-pc); outline-offset: 2px; }
         /* Recreate button — teal-ish accent, distinct from the neutral Restart/Pause pills */
         .dc-recreate {
           border: 1px solid rgba(46,143,87,0.4);
@@ -698,7 +705,9 @@
         }
         .dc-recreate:hover { background: rgba(46,143,87,0.16); }
         .dc-recreate:disabled { opacity: 0.5; cursor: not-allowed; }
+        .dc-recreate:focus-visible { outline: 2px solid var(--dc-rc, #2e8f57); outline-offset: 2px; }
         ha-switch[disabled] { opacity: 0.5; }
+        ha-switch:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; border-radius: 8px; }
         .dc-empty {
           font-size: 0.82rem;
           color: var(--secondary-text-color);
@@ -750,6 +759,15 @@
         </div>
       `;
       this._bindEvents();
+      this._restorePendingFocus();
+    }
+    /** Focuses the element matching _pendingFocusSelector (set by a handler just before render()), if any. */
+    _restorePendingFocus() {
+      if (!this._pendingFocusSelector) return;
+      const selector = this._pendingFocusSelector;
+      this._pendingFocusSelector = null;
+      const el = this.querySelector(selector);
+      if (el) el.focus();
     }
     // ── Overview ─────────────────────────────────────────────────────────────
     _renderOverview() {
@@ -1220,9 +1238,9 @@
         const hv = he?.state?.toLowerCase();
         if (hv && hv !== "unknown" && hv !== "unavailable") {
           const iconMap = {
-            healthy:   { icon: "mdi:heart-pulse",     color: "#2e8f57" },
-            unhealthy: { icon: "mdi:heart-broken",    color: "#c22040" },
-            starting:  { icon: "mdi:heart-half-full", color: "#f4b942" },
+            healthy:   { icon: "mdi:heart-pulse",     color: "var(--dc-rc, #2e8f57)" },
+            unhealthy: { icon: "mdi:heart-broken",    color: "var(--dc-nrc, #c22040)" },
+            starting:  { icon: "mdi:heart-half-full", color: "var(--dc-pc, #f4b942)" },
           };
           const cfg = iconMap[hv] ?? { icon: "mdi:help-circle-outline", color: "gray" };
           healthHtml = `<ha-icon icon="${cfg.icon}" style="--mdc-icon-size:0.85rem;color:${cfg.color};flex-shrink:0"></ha-icon>`;
@@ -1311,7 +1329,8 @@
             <ha-switch data-key="${escKey}"
               ${si.isRunning ? "checked" : ""}
               ${!si.canToggle || pending || si.isPaused ? "disabled" : ""}
-              title="${si.isRunning ? this._t("actions.stop_container") : this._t("actions.start_container")}">
+              title="${si.isRunning ? this._t("actions.stop_container") : this._t("actions.start_container")}"
+              aria-label="${si.isRunning ? this._t("actions.stop_container") : this._t("actions.start_container")} ${name}">
             </ha-switch>
             ${pauseBtnHtml}
             <button class="dc-restart" data-key="${escKey}" ${!si.canRestart || pending ? "disabled" : ""}>
@@ -1360,7 +1379,11 @@
       });
       // Prune images — arm the inline confirm step, cancel it, or actually run it.
       this.querySelectorAll("[data-prune-arm]").forEach((el) => {
-        const arm = () => { this._pruneConfirming = true; this.render(); };
+        const arm = () => {
+          this._pruneConfirming = true;
+          this._pendingFocusSelector = "[data-prune-cancel]";
+          this.render();
+        };
         el.addEventListener("click", arm);
         el.addEventListener("keydown", (e) => {
           if (e.key === "Enter" || e.key === " ") { e.preventDefault(); arm(); }
@@ -1368,6 +1391,7 @@
       });
       this.querySelector("[data-prune-cancel]")?.addEventListener("click", () => {
         this._pruneConfirming = false;
+        this._pendingFocusSelector = "[data-prune-arm]";
         this.render();
       });
       this.querySelector("[data-prune-confirm]")?.addEventListener("click", async (e) => {
@@ -1389,12 +1413,20 @@
       // Recreate container — same arm / cancel / confirm pattern as Prune, keyed per container.
       this.querySelectorAll("[data-recreate-arm]").forEach((el) => {
         const key = el.dataset.recreateArm;
-        const arm = () => { this._recreateConfirming.add(key); this.render(); };
+        const arm = () => {
+          this._recreateConfirming.add(key);
+          this._pendingFocusSelector = `[data-recreate-cancel="${CSS.escape(key)}"]`;
+          this.render();
+        };
         el.addEventListener("click", arm);
       });
       this.querySelectorAll("[data-recreate-cancel]").forEach((el) => {
         const key = el.dataset.recreateCancel;
-        el.addEventListener("click", () => { this._recreateConfirming.delete(key); this.render(); });
+        el.addEventListener("click", () => {
+          this._recreateConfirming.delete(key);
+          this._pendingFocusSelector = `[data-recreate-arm="${CSS.escape(key)}"]`;
+          this.render();
+        });
       });
       this.querySelectorAll("[data-recreate-confirm]").forEach((el) => {
         const key = el.dataset.recreateConfirm;
@@ -1454,7 +1486,8 @@
           if (tapAction) this._handleAction(tapAction, defaultEntity);
         });
         row.addEventListener("keydown", (e) => {
-          if (e.key === "Enter" && tapAction) { e.preventDefault(); this._handleAction(tapAction, defaultEntity); }
+          if (this._isInteractive(e)) return;
+          if ((e.key === "Enter" || e.key === " ") && tapAction) { e.preventDefault(); this._handleAction(tapAction, defaultEntity); }
         });
       });
     }
