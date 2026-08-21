@@ -453,6 +453,18 @@ shell_command:
 
 ## Changelog
 
+### 3.10.1
+**Fix regression from beta-3.10** — [#15](https://github.com/johro897/docker-card-extended/issues/15)
+- beta-3.10's focus restoration was moving keyboard focus correctly, but the Prune/Recreate Confirm/Cancel buttons (and the Restart/Pause/Recreate action buttons) had no visible focus outline — so tabbing to them looked broken even though it wasn't. This card renders directly into light DOM rather than a Shadow DOM like the others, so it doesn't get any isolation from the dashboard theme's own focus-outline handling, and these buttons were missing the explicit `:focus-visible` styling the rest of the card's keyboard-operable elements already had.
+- Added `:focus-visible` outlines to `.dc-confirm-btn`, `.dc-restart`, `.dc-pause`, `.dc-recreate`, and the container toggle switch
+
+### 3.10
+**Accessibility & theming** — [#15](https://github.com/johro897/docker-card-extended/issues/15)
+- Keyboard focus is now restored to the Cancel button after arming the Prune/Recreate confirm step, and back to the original button after cancelling — previously the re-render dropped focus to the page body
+- Container rows with a `tap_action` now respond to Space, not just Enter, matching every other keyboard-operable control in the card
+- The container start/stop toggle now has an `aria-label` naming both the action and the container, not just a `title` attribute
+- The update badge and container health icon now use the same theme-variable colors as the rest of the card (`running_color`/`not_running_color`/`paused_color`) instead of fixed hex values
+
 ### 3.9
 **Performance: dirty-check in the `hass` setter** — [#14](https://github.com/johro897/docker-card-extended/issues/14)
 - The card now only re-renders when something it actually watches (an overview entity or one of a container's configured entities) changes state or attributes — previously every single Home Assistant state change, anywhere in the install, triggered a full re-render of this card
