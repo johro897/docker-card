@@ -10,119 +10,410 @@
   const CARD_NAME = "docker-card";
   const CARD_DESCRIPTION = "Modern Docker container overview with start/stop toggles, pause/resume, restart actions and WUD update tracking.";
   const DEFAULT_LANGUAGE = "en";
-  const DEFAULT_TRANSLATIONS = {
-    common: {
-      card_title: "Docker Card",
-      container: "container",
-      containers: "Containers",
+
+  // Every UI string this card renders, keyed by BCP-47 primary language
+  // subtag, then by dotted namespace path (looked up via _getValue()).
+  // Bundled inline (not fetched from separate translations/<lang>.json
+  // files) — see root CLAUDE.md's Kortkonventioner for why: HACS's plugin
+  // category only ever distributes the one file named in hacs.json, so
+  // extra files never reach a real install. This card used to fetch
+  // translations/<lang>.json at runtime; those files never shipped, so
+  // only English ever actually rendered — this replaces that with the
+  // same inline pattern already proven in the other five cards.
+  const TRANSLATIONS = {
+    en: {
+      common: {
+        card_title: "Docker Card",
+        container: "container",
+        containers: "Containers",
+      },
+      placeholders: {
+        waiting: "Waiting for Home Assistant…",
+        no_containers: "No containers configured.",
+      },
+      overview: {
+        running_total: "Running / Total",
+        running_paused_stopped: "Running · Paused · Stopped",
+        images: "Images",
+        docker: "Docker",
+        os: "OS",
+        wud_last_poll: "Last WUD Scan",
+        wud_scan: "Force Scan",
+        running_total_aria: "Open running containers details",
+        images_aria: "Open Docker images details",
+        docker_aria: "Open Docker version details",
+        os_aria: "Open operating system details",
+        wud_last_poll_aria: "Open WUD last poll details",
+        wud_scan_aria: "Trigger WUD scan now",
+        container_disk: "Container Disk",
+        container_disk_aria: "Open container disk usage details",
+        image_disk: "Image Disk",
+        image_disk_aria: "Open image disk usage details",
+        volume_disk: "Volume Disk",
+        volume_disk_aria: "Open volume disk usage details",
+        prune_images: "Prune Images",
+        prune_now: "Prune now",
+        prune_pending: "Pruning…",
+        prune_confirm_text: "Remove unused images?",
+        prune_confirm: "Confirm",
+        prune_cancel: "Cancel",
+        prune_aria: "Prune unused Docker images",
+      },
+      container: { image: "Image" },
+      aria: {
+        open_status_details: "Open Docker status details",
+        collapse_containers: "Collapse container list",
+        expand_containers: "Expand container list",
+      },
+      resources: { cpu: "CPU", memory: "Memory", no_history: "no history" },
+      actions: {
+        start: "start",
+        stop: "stop",
+        pause: "pause",
+        resume: "resume",
+        restart: "Restart",
+        start_container: "Start container",
+        stop_container: "Stop container",
+        pause_container: "Pause container",
+        resume_container: "Resume container",
+        recreate: "Recreate",
+        recreate_container: "Recreate container",
+        recreate_confirm_text: "Recreate container?",
+        recreating: "Recreating…",
+        confirm: "Confirm",
+        cancel: "Cancel",
+      },
+      notifications: {
+        starting: "Starting {name}…",
+        stopping: "Stopping {name}…",
+        failed_start: "Failed to start {name}. Check logs.",
+        failed_stop: "Failed to stop {name}. Check logs.",
+        restarting: "Restarting {name}…",
+        failed_restart: "Failed to restart {name}.",
+        pausing: "Pausing {name}…",
+        resuming: "Resuming {name}…",
+        failed_pause: "Failed to pause {name}. Check logs.",
+        failed_resume: "Failed to resume {name}. Check logs.",
+        missing_toggle: "No service configured to {action} {name}.",
+        missing_restart: "No restart service configured for {name}.",
+        missing_pause: "No pause service configured for {name}.",
+        missing_resume: "No resume service configured for {name}.",
+        missing_recreate: "No recreate service configured for {name}.",
+        recreating: "Recreating {name}…",
+        failed_recreate: "Failed to recreate {name}.",
+        wud_scan_triggered: "WUD scan triggered.",
+        wud_scan_failed: "WUD scan failed.",
+        prune_triggered: "Prune started.",
+        prune_failed: "Prune failed.",
+      },
+      status: {
+        online: "Online", offline: "Offline", idle: "Idle",
+        running: "Running", stopped: "Stopped", unknown: "Unknown",
+        starting: "Starting", degraded: "Degraded", paused: "Paused",
+      },
+      update: {
+        available: "Update available",
+        current: "Current",
+        new: "New",
+        days: "d ago",
+        release_notes: "Release notes",
+      },
     },
-    placeholders: {
-      waiting: "Waiting for Home Assistant…",
-      no_containers: "No containers configured.",
+    sv: {
+      common: {
+        card_title: "Docker-kort",
+        container: "container",
+        containers: "Containrar",
+      },
+      placeholders: {
+        waiting: "Väntar på Home Assistant…",
+        no_containers: "Inga containrar konfigurerade.",
+      },
+      overview: {
+        running_total: "Igång / Totalt",
+        running_paused_stopped: "Igång · Pausad · Stoppad",
+        images: "Images",
+        docker: "Docker",
+        os: "OS",
+        wud_last_poll: "Senaste WUD-skanning",
+        wud_scan: "Tvinga skanning",
+        running_total_aria: "Öppna detaljer för körande containrar",
+        images_aria: "Öppna detaljer för Docker-images",
+        docker_aria: "Öppna detaljer för Docker-version",
+        os_aria: "Öppna detaljer för operativsystem",
+        wud_last_poll_aria: "Öppna detaljer för senaste WUD-poll",
+        wud_scan_aria: "Utlös WUD-skanning nu",
+        container_disk: "Containerdisk",
+        container_disk_aria: "Öppna detaljer för containerns diskanvändning",
+        image_disk: "Image-disk",
+        image_disk_aria: "Öppna detaljer för images diskanvändning",
+        volume_disk: "Volymdisk",
+        volume_disk_aria: "Öppna detaljer för volymens diskanvändning",
+        prune_images: "Rensa images",
+        prune_now: "Rensa nu",
+        prune_pending: "Rensar…",
+        prune_confirm_text: "Ta bort oanvända images?",
+        prune_confirm: "Bekräfta",
+        prune_cancel: "Avbryt",
+        prune_aria: "Rensa oanvända Docker-images",
+      },
+      container: { image: "Image" },
+      aria: {
+        open_status_details: "Öppna detaljer för Docker-status",
+        collapse_containers: "Fäll ihop containerlistan",
+        expand_containers: "Expandera containerlistan",
+      },
+      resources: { cpu: "CPU", memory: "Minne", no_history: "ingen historik" },
+      actions: {
+        start: "starta",
+        stop: "stoppa",
+        pause: "pausa",
+        resume: "återuppta",
+        restart: "Starta om",
+        start_container: "Starta container",
+        stop_container: "Stoppa container",
+        pause_container: "Pausa container",
+        resume_container: "Återuppta container",
+        recreate: "Återskapa",
+        recreate_container: "Återskapa container",
+        recreate_confirm_text: "Återskapa container?",
+        recreating: "Återskapar…",
+        confirm: "Bekräfta",
+        cancel: "Avbryt",
+      },
+      notifications: {
+        starting: "Startar {name}…",
+        stopping: "Stoppar {name}…",
+        failed_start: "Kunde inte starta {name}. Kontrollera loggarna.",
+        failed_stop: "Kunde inte stoppa {name}. Kontrollera loggarna.",
+        restarting: "Startar om {name}…",
+        failed_restart: "Kunde inte starta om {name}.",
+        pausing: "Pausar {name}…",
+        resuming: "Återupptar {name}…",
+        failed_pause: "Kunde inte pausa {name}. Kontrollera loggarna.",
+        failed_resume: "Kunde inte återuppta {name}. Kontrollera loggarna.",
+        missing_toggle: "Ingen tjänst konfigurerad för att {action} {name}.",
+        missing_restart: "Ingen omstartstjänst konfigurerad för {name}.",
+        missing_pause: "Ingen paustjänst konfigurerad för {name}.",
+        missing_resume: "Ingen återupptagningstjänst konfigurerad för {name}.",
+        missing_recreate: "Ingen återskapandetjänst konfigurerad för {name}.",
+        recreating: "Återskapar {name}…",
+        failed_recreate: "Kunde inte återskapa {name}.",
+        wud_scan_triggered: "WUD-skanning utlöst.",
+        wud_scan_failed: "WUD-skanning misslyckades.",
+        prune_triggered: "Rensning startad.",
+        prune_failed: "Rensning misslyckades.",
+      },
+      status: {
+        online: "Online", offline: "Offline", idle: "Inaktiv",
+        running: "Igång", stopped: "Stoppad", unknown: "Okänd",
+        starting: "Startar", degraded: "Försämrad", paused: "Pausad",
+      },
+      update: {
+        available: "Uppdatering tillgänglig",
+        current: "Nuvarande",
+        new: "Ny",
+        days: "d sedan",
+        release_notes: "Versionsinformation",
+      },
     },
-    overview: {
-      running_total: "Running / Total",
-      running_paused_stopped: "Running · Paused · Stopped",
-      images: "Images",
-      docker: "Docker",
-      os: "OS",
-      wud_last_poll: "Last WUD Scan",
-      wud_scan: "Force Scan",
-      running_total_aria: "Open running containers details",
-      images_aria: "Open Docker images details",
-      docker_aria: "Open Docker version details",
-      os_aria: "Open operating system details",
-      wud_last_poll_aria: "Open WUD last poll details",
-      wud_scan_aria: "Trigger WUD scan now",
-      container_disk: "Container Disk",
-      container_disk_aria: "Open container disk usage details",
-      image_disk: "Image Disk",
-      image_disk_aria: "Open image disk usage details",
-      volume_disk: "Volume Disk",
-      volume_disk_aria: "Open volume disk usage details",
-      prune_images: "Prune Images",
-      prune_now: "Prune now",
-      prune_pending: "Pruning…",
-      prune_confirm_text: "Remove unused images?",
-      prune_confirm: "Confirm",
-      prune_cancel: "Cancel",
-      prune_aria: "Prune unused Docker images",
+    de: {
+      common: {
+        card_title: "Docker-Karte",
+        container: "Container",
+        containers: "Container",
+      },
+      placeholders: {
+        waiting: "Warte auf Home Assistant…",
+        no_containers: "Keine Container konfiguriert.",
+      },
+      overview: {
+        running_total: "Laufend / Gesamt",
+        running_paused_stopped: "Laufend · Pausiert · Gestoppt",
+        images: "Images",
+        docker: "Docker",
+        os: "Betriebssystem",
+        wud_last_poll: "Letzter WUD-Scan",
+        wud_scan: "Scan erzwingen",
+        running_total_aria: "Details zu laufenden Containern öffnen",
+        images_aria: "Details zu Docker-Images öffnen",
+        docker_aria: "Details zur Docker-Version öffnen",
+        os_aria: "Details zum Betriebssystem öffnen",
+        wud_last_poll_aria: "Details zum letzten WUD-Abruf öffnen",
+        wud_scan_aria: "WUD-Scan jetzt auslösen",
+        container_disk: "Container-Speicher",
+        container_disk_aria: "Details zur Container-Speichernutzung öffnen",
+        image_disk: "Image-Speicher",
+        image_disk_aria: "Details zur Image-Speichernutzung öffnen",
+        volume_disk: "Volume-Speicher",
+        volume_disk_aria: "Details zur Volume-Speichernutzung öffnen",
+        prune_images: "Images bereinigen",
+        prune_now: "Jetzt bereinigen",
+        prune_pending: "Wird bereinigt…",
+        prune_confirm_text: "Ungenutzte Images entfernen?",
+        prune_confirm: "Bestätigen",
+        prune_cancel: "Abbrechen",
+        prune_aria: "Ungenutzte Docker-Images bereinigen",
+      },
+      container: { image: "Image" },
+      aria: {
+        open_status_details: "Docker-Statusdetails öffnen",
+        collapse_containers: "Containerliste einklappen",
+        expand_containers: "Containerliste ausklappen",
+      },
+      resources: { cpu: "CPU", memory: "Arbeitsspeicher", no_history: "kein Verlauf" },
+      actions: {
+        start: "starten",
+        stop: "stoppen",
+        pause: "pausieren",
+        resume: "fortsetzen",
+        restart: "Neu starten",
+        start_container: "Container starten",
+        stop_container: "Container stoppen",
+        pause_container: "Container pausieren",
+        resume_container: "Container fortsetzen",
+        recreate: "Neu erstellen",
+        recreate_container: "Container neu erstellen",
+        recreate_confirm_text: "Container neu erstellen?",
+        recreating: "Wird neu erstellt…",
+        confirm: "Bestätigen",
+        cancel: "Abbrechen",
+      },
+      notifications: {
+        starting: "{name} wird gestartet…",
+        stopping: "{name} wird gestoppt…",
+        failed_start: "{name} konnte nicht gestartet werden. Protokolle prüfen.",
+        failed_stop: "{name} konnte nicht gestoppt werden. Protokolle prüfen.",
+        restarting: "{name} wird neu gestartet…",
+        failed_restart: "{name} konnte nicht neu gestartet werden.",
+        pausing: "{name} wird pausiert…",
+        resuming: "{name} wird fortgesetzt…",
+        failed_pause: "{name} konnte nicht pausiert werden. Protokolle prüfen.",
+        failed_resume: "{name} konnte nicht fortgesetzt werden. Protokolle prüfen.",
+        missing_toggle: "Kein Dienst konfiguriert, um {name} zu {action}.",
+        missing_restart: "Kein Neustart-Dienst für {name} konfiguriert.",
+        missing_pause: "Kein Pausier-Dienst für {name} konfiguriert.",
+        missing_resume: "Kein Fortsetzungs-Dienst für {name} konfiguriert.",
+        missing_recreate: "Kein Neuerstellungs-Dienst für {name} konfiguriert.",
+        recreating: "{name} wird neu erstellt…",
+        failed_recreate: "{name} konnte nicht neu erstellt werden.",
+        wud_scan_triggered: "WUD-Scan ausgelöst.",
+        wud_scan_failed: "WUD-Scan fehlgeschlagen.",
+        prune_triggered: "Bereinigung gestartet.",
+        prune_failed: "Bereinigung fehlgeschlagen.",
+      },
+      status: {
+        online: "Online", offline: "Offline", idle: "Leerlauf",
+        running: "Läuft", stopped: "Gestoppt", unknown: "Unbekannt",
+        starting: "Startet", degraded: "Beeinträchtigt", paused: "Pausiert",
+      },
+      update: {
+        available: "Update verfügbar",
+        current: "Aktuell",
+        new: "Neu",
+        days: "Tag(e) her",
+        release_notes: "Versionshinweise",
+      },
     },
-    container: { image: "Image" },
-    aria: {
-      open_status_details: "Open Docker status details",
-      collapse_containers: "Collapse container list",
-      expand_containers: "Expand container list",
-    },
-    resources: { cpu: "CPU", memory: "Memory", no_history: "no history" },
-    actions: {
-      start: "start",
-      stop: "stop",
-      pause: "pause",
-      resume: "resume",
-      restart: "Restart",
-      start_container: "Start container",
-      stop_container: "Stop container",
-      pause_container: "Pause container",
-      resume_container: "Resume container",
-      recreate: "Recreate",
-      recreate_container: "Recreate container",
-      recreate_confirm_text: "Recreate container?",
-      recreating: "Recreating…",
-      confirm: "Confirm",
-      cancel: "Cancel",
-    },
-    notifications: {
-      starting: "Starting {name}…",
-      stopping: "Stopping {name}…",
-      failed_start: "Failed to start {name}. Check logs.",
-      failed_stop: "Failed to stop {name}. Check logs.",
-      restarting: "Restarting {name}…",
-      failed_restart: "Failed to restart {name}.",
-      pausing: "Pausing {name}…",
-      resuming: "Resuming {name}…",
-      failed_pause: "Failed to pause {name}. Check logs.",
-      failed_resume: "Failed to resume {name}. Check logs.",
-      missing_toggle: "No service configured to {action} {name}.",
-      missing_restart: "No restart service configured for {name}.",
-      missing_pause: "No pause service configured for {name}.",
-      missing_resume: "No resume service configured for {name}.",
-      missing_recreate: "No recreate service configured for {name}.",
-      recreating: "Recreating {name}…",
-      failed_recreate: "Failed to recreate {name}.",
-      wud_scan_triggered: "WUD scan triggered.",
-      wud_scan_failed: "WUD scan failed.",
-      prune_triggered: "Prune started.",
-      prune_failed: "Prune failed.",
-    },
-    status: {
-      online: "Online", offline: "Offline", idle: "Idle",
-      running: "Running", stopped: "Stopped", unknown: "Unknown",
-      starting: "Starting", degraded: "Degraded", paused: "Paused",
-    },
-    update: {
-      available: "Update available",
-      current: "Current",
-      new: "New",
-      days: "d ago",
-      release_notes: "Release notes",
+    fr: {
+      common: {
+        card_title: "Carte Docker",
+        container: "conteneur",
+        containers: "Conteneurs",
+      },
+      placeholders: {
+        waiting: "En attente de Home Assistant…",
+        no_containers: "Aucun conteneur configuré.",
+      },
+      overview: {
+        running_total: "Actifs / Total",
+        running_paused_stopped: "Actif · En pause · Arrêté",
+        images: "Images",
+        docker: "Docker",
+        os: "OS",
+        wud_last_poll: "Dernier scan WUD",
+        wud_scan: "Forcer le scan",
+        running_total_aria: "Ouvrir les détails des conteneurs actifs",
+        images_aria: "Ouvrir les détails des images Docker",
+        docker_aria: "Ouvrir les détails de la version Docker",
+        os_aria: "Ouvrir les détails du système d'exploitation",
+        wud_last_poll_aria: "Ouvrir les détails du dernier scan WUD",
+        wud_scan_aria: "Déclencher un scan WUD maintenant",
+        container_disk: "Disque du conteneur",
+        container_disk_aria: "Ouvrir les détails d'utilisation disque du conteneur",
+        image_disk: "Disque des images",
+        image_disk_aria: "Ouvrir les détails d'utilisation disque des images",
+        volume_disk: "Disque des volumes",
+        volume_disk_aria: "Ouvrir les détails d'utilisation disque des volumes",
+        prune_images: "Nettoyer les images",
+        prune_now: "Nettoyer maintenant",
+        prune_pending: "Nettoyage…",
+        prune_confirm_text: "Supprimer les images inutilisées ?",
+        prune_confirm: "Confirmer",
+        prune_cancel: "Annuler",
+        prune_aria: "Nettoyer les images Docker inutilisées",
+      },
+      container: { image: "Image" },
+      aria: {
+        open_status_details: "Ouvrir les détails du statut Docker",
+        collapse_containers: "Réduire la liste des conteneurs",
+        expand_containers: "Développer la liste des conteneurs",
+      },
+      resources: { cpu: "CPU", memory: "Mémoire", no_history: "aucun historique" },
+      actions: {
+        start: "démarrer",
+        stop: "arrêter",
+        pause: "mettre en pause",
+        resume: "reprendre",
+        restart: "Redémarrer",
+        start_container: "Démarrer le conteneur",
+        stop_container: "Arrêter le conteneur",
+        pause_container: "Mettre le conteneur en pause",
+        resume_container: "Reprendre le conteneur",
+        recreate: "Recréer",
+        recreate_container: "Recréer le conteneur",
+        recreate_confirm_text: "Recréer le conteneur ?",
+        recreating: "Recréation…",
+        confirm: "Confirmer",
+        cancel: "Annuler",
+      },
+      notifications: {
+        starting: "Démarrage de {name}…",
+        stopping: "Arrêt de {name}…",
+        failed_start: "Échec du démarrage de {name}. Vérifiez les journaux.",
+        failed_stop: "Échec de l'arrêt de {name}. Vérifiez les journaux.",
+        restarting: "Redémarrage de {name}…",
+        failed_restart: "Échec du redémarrage de {name}.",
+        pausing: "Mise en pause de {name}…",
+        resuming: "Reprise de {name}…",
+        failed_pause: "Échec de la mise en pause de {name}. Vérifiez les journaux.",
+        failed_resume: "Échec de la reprise de {name}. Vérifiez les journaux.",
+        missing_toggle: "Aucun service configuré pour {action} {name}.",
+        missing_restart: "Aucun service de redémarrage configuré pour {name}.",
+        missing_pause: "Aucun service de pause configuré pour {name}.",
+        missing_resume: "Aucun service de reprise configuré pour {name}.",
+        missing_recreate: "Aucun service de recréation configuré pour {name}.",
+        recreating: "Recréation de {name}…",
+        failed_recreate: "Échec de la recréation de {name}.",
+        wud_scan_triggered: "Scan WUD déclenché.",
+        wud_scan_failed: "Échec du scan WUD.",
+        prune_triggered: "Nettoyage démarré.",
+        prune_failed: "Échec du nettoyage.",
+      },
+      status: {
+        online: "En ligne", offline: "Hors ligne", idle: "Inactif",
+        running: "Actif", stopped: "Arrêté", unknown: "Inconnu",
+        starting: "Démarrage", degraded: "Dégradé", paused: "En pause",
+      },
+      update: {
+        available: "Mise à jour disponible",
+        current: "Actuelle",
+        new: "Nouvelle",
+        days: "j",
+        release_notes: "Notes de version",
+      },
     },
   };
-  const TRANSLATION_CACHE = new Map([[DEFAULT_LANGUAGE, DEFAULT_TRANSLATIONS]]);
-  const TRANSLATION_PROMISES = new Map();
-  const MODULE_BASE_URL = (() => {
-    if (typeof document === "undefined") return undefined;
-    const script = document.currentScript;
-    if (script && script.src) {
-      try {
-        const url = new URL(script.src, window.location.href);
-        url.hash = ""; url.search = "";
-        url.pathname = url.pathname.replace(/[^/]+$/, "");
-        return url.toString();
-      } catch (e) { console.warn("docker-card: Unable to determine base URL", e); }
-    }
-    return undefined;
-  })();
   if (typeof window !== "undefined") {
     window.customCards = window.customCards || [];
     if (!window.customCards.some((c) => c.type === CARD_NAME)) {
@@ -1860,7 +2151,7 @@
      */
     _isDirty(prevHass, hass) {
       if (!prevHass || !hass) return true;
-      if (prevHass.language !== hass.language || prevHass.selectedLanguage !== hass.selectedLanguage) return true;
+      if (prevHass.language !== hass.language) return true;
       if (prevHass.locale !== hass.locale) return true;
       for (const id of this._watchedEntities()) {
         if (prevHass.states?.[id] !== hass.states?.[id]) return true;
@@ -1944,12 +2235,16 @@
       }
     }
     // ── Translations ──────────────────────────────────────────────────────────
+    /** Resolves the HA-configured language to one of our translated languages, falling back to English. */
+    _lang() {
+      const raw = (this._hass?.locale?.language || this._hass?.language || DEFAULT_LANGUAGE).toLowerCase();
+      const primary = raw.split("-")[0];
+      return TRANSLATIONS[primary] ? primary : DEFAULT_LANGUAGE;
+    }
     _t(key, replacements) {
       if (!key) return "";
-      const language = this._hass?.selectedLanguage || this._hass?.language || DEFAULT_LANGUAGE;
-      this._maybeLoadTranslations(language);
-      const translations = TRANSLATION_CACHE.get(language) || TRANSLATION_CACHE.get(DEFAULT_LANGUAGE) || DEFAULT_TRANSLATIONS;
-      const raw = this._getValue(translations, key) || this._getValue(DEFAULT_TRANSLATIONS, key) || key;
+      const translations = TRANSLATIONS[this._lang()] || TRANSLATIONS[DEFAULT_LANGUAGE];
+      const raw = this._getValue(translations, key) ?? this._getValue(TRANSLATIONS[DEFAULT_LANGUAGE], key) ?? key;
       if (!replacements || typeof raw !== "string") return raw;
       return raw.replace(/\{([^}]+)\}/g, (match, k) =>
         Object.prototype.hasOwnProperty.call(replacements, k) ? replacements[k] : match
@@ -1959,19 +2254,6 @@
       if (!tree || !key) return undefined;
       return key.split(".").reduce((acc, seg) =>
         acc && Object.prototype.hasOwnProperty.call(acc, seg) ? acc[seg] : undefined, tree);
-    }
-    _maybeLoadTranslations(language) {
-      if (!language || language === DEFAULT_LANGUAGE) return;
-      if (TRANSLATION_CACHE.has(language) || TRANSLATION_PROMISES.has(language)) return;
-      if (!MODULE_BASE_URL) return;
-      let url;
-      try { url = new URL(`translations/${language}.json`, MODULE_BASE_URL).toString(); } catch { return; }
-      const p = fetch(url)
-        .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
-        .then((data) => { if (data && typeof data === "object") { TRANSLATION_CACHE.set(language, data); this.render(); } })
-        .catch((e) => console.warn(`docker-card: Failed to load ${language} translations`, e))
-        .finally(() => TRANSLATION_PROMISES.delete(language));
-      TRANSLATION_PROMISES.set(language, p);
     }
   }
   customElements.define(CARD_NAME, DockerCard);

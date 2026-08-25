@@ -36,6 +36,7 @@ An extended version of Docker Card, inspired by [vineetchoudhary/lovelace-docker
 - **WUD overview tiles** — shows last scan time and a one-click Force Scan button directly in the card overview
 - **Prune unused images** — one-click prune of unused Docker images via Portainer's own button entity, with an inline confirmation step before it runs
 - **Disk usage overview tiles** — container, image, and volume disk usage from Portainer, shown in whatever unit the sensor reports
+- **Multi-language UI** — auto-translates to your Home Assistant language: English (default), Swedish, German, French
 - Theme-aware styling with configurable running / paused / not-running accent colors
 - Works out-of-the-box with entities from the Portainer integration; also supports any toggle-friendly domain (`switch`, `input_boolean`, `light`, etc.)
 - Optional tap/hold actions per container row for quick navigation, service calls, or external links
@@ -452,6 +453,12 @@ shell_command:
 | Disk usage tiles stuck on "—" / entity shows `unknown` or `unavailable` | Known upstream Portainer/HA limitation, not a card bug — see the note under [docker_overview options](#docker_overview-options). `docker system df` is slow on overlay2 filesystems and can time out ([tracked upstream](https://github.com/home-assistant/core/issues/165617), closed as not planned) |
 
 ## Changelog
+
+### 3.8
+**Fix: language auto-detection was silently broken** — [#22](https://github.com/johro897/docker-card-extended/issues/22)
+- The card had a full translation mechanism, but it was built to fetch separate `translations/<lang>.json` files at runtime — HACS's plugin category only ever distributes the single file named in `hacs.json`, so those files never reached a real install and the card has only ever rendered English, regardless of your HA instance's language
+- Fixed by bundling English, Swedish, German, and French directly in the card file, matching the pattern already used by this project's other five cards
+- Also fixed the language-detection source: previously read `hass.selectedLanguage` (not a real HA frontend property) — now reads `hass.locale.language`/`hass.language`, matching every other translated card here
 
 ### 3.7
 **Security hardening** — [#13](https://github.com/johro897/docker-card-extended/issues/13)
