@@ -59,6 +59,16 @@
         prune_confirm: "Confirm",
         prune_cancel: "Cancel",
         prune_aria: "Prune unused Docker images",
+        prune_volumes: "Prune Volumes",
+        prune_volumes_now: "Prune now",
+        prune_volumes_pending: "Pruning…",
+        prune_volumes_confirm_text: "Remove unused volumes?",
+        prune_volumes_aria: "Prune unused Docker volumes",
+        prune_networks: "Prune Networks",
+        prune_networks_now: "Prune now",
+        prune_networks_pending: "Pruning…",
+        prune_networks_confirm_text: "Remove unused networks?",
+        prune_networks_aria: "Prune unused Docker networks",
       },
       container: { image: "Image" },
       aria: {
@@ -106,6 +116,10 @@
         wud_scan_failed: "WUD scan failed.",
         prune_triggered: "Prune started.",
         prune_failed: "Prune failed.",
+        prune_volumes_triggered: "Volume prune started.",
+        prune_volumes_failed: "Volume prune failed.",
+        prune_networks_triggered: "Network prune started.",
+        prune_networks_failed: "Network prune failed.",
       },
       status: {
         online: "Online", offline: "Offline", idle: "Idle",
@@ -158,6 +172,16 @@
         prune_confirm: "Bekräfta",
         prune_cancel: "Avbryt",
         prune_aria: "Rensa oanvända Docker-images",
+        prune_volumes: "Rensa volymer",
+        prune_volumes_now: "Rensa nu",
+        prune_volumes_pending: "Rensar…",
+        prune_volumes_confirm_text: "Ta bort oanvända volymer?",
+        prune_volumes_aria: "Rensa oanvända Docker-volymer",
+        prune_networks: "Rensa nätverk",
+        prune_networks_now: "Rensa nu",
+        prune_networks_pending: "Rensar…",
+        prune_networks_confirm_text: "Ta bort oanvända nätverk?",
+        prune_networks_aria: "Rensa oanvända Docker-nätverk",
       },
       container: { image: "Image" },
       aria: {
@@ -205,6 +229,10 @@
         wud_scan_failed: "WUD-skanning misslyckades.",
         prune_triggered: "Rensning startad.",
         prune_failed: "Rensning misslyckades.",
+        prune_volumes_triggered: "Volymrensning startad.",
+        prune_volumes_failed: "Volymrensning misslyckades.",
+        prune_networks_triggered: "Nätverksrensning startad.",
+        prune_networks_failed: "Nätverksrensning misslyckades.",
       },
       status: {
         online: "Online", offline: "Offline", idle: "Inaktiv",
@@ -257,6 +285,16 @@
         prune_confirm: "Bestätigen",
         prune_cancel: "Abbrechen",
         prune_aria: "Ungenutzte Docker-Images bereinigen",
+        prune_volumes: "Volumes bereinigen",
+        prune_volumes_now: "Jetzt bereinigen",
+        prune_volumes_pending: "Wird bereinigt…",
+        prune_volumes_confirm_text: "Ungenutzte Volumes entfernen?",
+        prune_volumes_aria: "Ungenutzte Docker-Volumes bereinigen",
+        prune_networks: "Netzwerke bereinigen",
+        prune_networks_now: "Jetzt bereinigen",
+        prune_networks_pending: "Wird bereinigt…",
+        prune_networks_confirm_text: "Ungenutzte Netzwerke entfernen?",
+        prune_networks_aria: "Ungenutzte Docker-Netzwerke bereinigen",
       },
       container: { image: "Image" },
       aria: {
@@ -304,6 +342,10 @@
         wud_scan_failed: "WUD-Scan fehlgeschlagen.",
         prune_triggered: "Bereinigung gestartet.",
         prune_failed: "Bereinigung fehlgeschlagen.",
+        prune_volumes_triggered: "Volume-Bereinigung gestartet.",
+        prune_volumes_failed: "Volume-Bereinigung fehlgeschlagen.",
+        prune_networks_triggered: "Netzwerk-Bereinigung gestartet.",
+        prune_networks_failed: "Netzwerk-Bereinigung fehlgeschlagen.",
       },
       status: {
         online: "Online", offline: "Offline", idle: "Leerlauf",
@@ -356,6 +398,16 @@
         prune_confirm: "Confirmer",
         prune_cancel: "Annuler",
         prune_aria: "Nettoyer les images Docker inutilisées",
+        prune_volumes: "Nettoyer les volumes",
+        prune_volumes_now: "Nettoyer maintenant",
+        prune_volumes_pending: "Nettoyage…",
+        prune_volumes_confirm_text: "Supprimer les volumes inutilisés ?",
+        prune_volumes_aria: "Nettoyer les volumes Docker inutilisés",
+        prune_networks: "Nettoyer les réseaux",
+        prune_networks_now: "Nettoyer maintenant",
+        prune_networks_pending: "Nettoyage…",
+        prune_networks_confirm_text: "Supprimer les réseaux inutilisés ?",
+        prune_networks_aria: "Nettoyer les réseaux Docker inutilisés",
       },
       container: { image: "Image" },
       aria: {
@@ -403,6 +455,10 @@
         wud_scan_failed: "Échec du scan WUD.",
         prune_triggered: "Nettoyage démarré.",
         prune_failed: "Échec du nettoyage.",
+        prune_volumes_triggered: "Nettoyage des volumes démarré.",
+        prune_volumes_failed: "Échec du nettoyage des volumes.",
+        prune_networks_triggered: "Nettoyage des réseaux démarré.",
+        prune_networks_failed: "Échec du nettoyage des réseaux.",
       },
       status: {
         online: "En ligne", offline: "Hors ligne", idle: "Inactif",
@@ -473,8 +529,10 @@
       this._listId = `dc-list-${cryptoRandom()}`;
       this._columns = 1;
       this._wudScanPending = false;
-      this._pruneConfirming = false;
-      this._prunePending = false;
+      // Maintenance actions (Prune Images/Volumes/Networks) — keyed by action id
+      // ("images"/"volumes"/"networks") so several can be armed/pending independently.
+      this._maintConfirming = new Set();
+      this._maintPending = new Set();
       this._recreateConfirming = new Set(); // container keys currently showing the recreate confirm step
       // History cache for sparkline graphs: entityId -> { points, fetchedAt, promise }
       this._history = new Map();
@@ -1167,7 +1225,10 @@
           items.push({ label: this._t("overview.updates_available"), value: String(updateCount), badge: "UPD" });
         }
       }
-      if (!items.length && !oc.wud_scan && !oc.prune_images) return "";
+      const maintActions = this._maintenanceActions();
+      const imagesAction = maintActions.find((a) => a.id === "images");
+      const extraMaintActions = maintActions.filter((a) => a.id !== "images");
+      if (!items.length && !oc.wud_scan && !maintActions.length) return "";
       let html = `<div class="dc-overview">`;
       html += items.map((item) => `
         <div class="dc-ov-item${item.entityId ? " actionable" : ""}"
@@ -1181,21 +1242,24 @@
           </div>
         </div>`).join("");
       // WUD scan + Prune images — share one tile when both are configured,
-      // otherwise each renders alone exactly as before.
-      if (oc.wud_scan && oc.prune_images) {
+      // otherwise each renders alone exactly as before. Prune Volumes/Networks
+      // (#17) aren't part of that shared tile — each gets its own standalone
+      // tile below, same as Prune Images would on its own.
+      if (oc.wud_scan && imagesAction) {
         html += `
           <div class="dc-ov-item dc-maint">
             <div class="dc-maint-row">
               ${this._renderWudScanHalf(oc.wud_scan)}
               <div class="dc-maint-divider"></div>
-              ${this._renderPruneHalf(oc.prune_images)}
+              ${this._renderMaintenanceHalf(imagesAction)}
             </div>
           </div>`;
       } else if (oc.wud_scan) {
         html += `<div class="dc-ov-item wud-scan${this._wudScanPending ? " pending" : ""}">${this._renderWudScanHalf(oc.wud_scan)}</div>`;
-      } else if (oc.prune_images) {
-        html += `<div class="dc-ov-item">${this._renderPruneHalf(oc.prune_images)}</div>`;
+      } else if (imagesAction) {
+        html += `<div class="dc-ov-item">${this._renderMaintenanceHalf(imagesAction)}</div>`;
       }
+      html += extraMaintActions.map((action) => `<div class="dc-ov-item">${this._renderMaintenanceHalf(action)}</div>`).join("");
       html += `</div>`;
       return html;
     }
@@ -1215,39 +1279,65 @@
           </div>
         </div>`;
     }
-    /** Prune content — idle → inline confirm → pending. Same markup standalone or combined. */
-    _renderPruneHalf(entityId) {
-      const badge = `<div class="dc-ov-badge prune"><ha-icon icon="mdi:broom" style="--mdc-icon-size:1rem"></ha-icon></div>`;
-      if (this._prunePending) {
+    /**
+     * Configured maintenance actions (Prune Images/Volumes/Networks), derived
+     * fresh from docker_overview each call. Each shares the same idle → inline
+     * confirm → pending flow, generalized from the original Prune Images-only
+     * implementation (#7) to also cover Portainer's volume/network prune
+     * buttons (#17). "images" keeps its original data-prune-* attribute names
+     * for backward compatibility; the others get their own dataPrefix.
+     */
+    _maintenanceActions() {
+      const oc = this.config.docker_overview || {};
+      const defs = [
+        { id: "images", entityId: oc.prune_images, dataPrefix: "prune", icon: "mdi:broom",
+          labelKey: "overview.prune_images", nowKey: "overview.prune_now", pendingKey: "overview.prune_pending",
+          confirmTextKey: "overview.prune_confirm_text", ariaKey: "overview.prune_aria",
+          triggeredKey: "notifications.prune_triggered", failedKey: "notifications.prune_failed" },
+        { id: "volumes", entityId: oc.prune_volumes, dataPrefix: "prune-volumes", icon: "mdi:database-off-outline",
+          labelKey: "overview.prune_volumes", nowKey: "overview.prune_volumes_now", pendingKey: "overview.prune_volumes_pending",
+          confirmTextKey: "overview.prune_volumes_confirm_text", ariaKey: "overview.prune_volumes_aria",
+          triggeredKey: "notifications.prune_volumes_triggered", failedKey: "notifications.prune_volumes_failed" },
+        { id: "networks", entityId: oc.prune_networks, dataPrefix: "prune-networks", icon: "mdi:lan-disconnect",
+          labelKey: "overview.prune_networks", nowKey: "overview.prune_networks_now", pendingKey: "overview.prune_networks_pending",
+          confirmTextKey: "overview.prune_networks_confirm_text", ariaKey: "overview.prune_networks_aria",
+          triggeredKey: "notifications.prune_networks_triggered", failedKey: "notifications.prune_networks_failed" },
+      ];
+      return defs.filter((d) => d.entityId);
+    }
+    /** Maintenance action content — idle → inline confirm → pending. Same markup standalone or combined. */
+    _renderMaintenanceHalf(action) {
+      const badge = `<div class="dc-ov-badge prune"><ha-icon icon="${action.icon}" style="--mdc-icon-size:1rem"></ha-icon></div>`;
+      if (this._maintPending.has(action.id)) {
         return `
           <div class="dc-maint-half pending">
             ${badge}
             <div class="dc-ov-text">
-              <div class="dc-ov-label">${this._t("overview.prune_images")}</div>
-              <div class="dc-ov-value prune-action">${this._t("overview.prune_pending")}</div>
+              <div class="dc-ov-label">${this._t(action.labelKey)}</div>
+              <div class="dc-ov-value prune-action">${this._t(action.pendingKey)}</div>
             </div>
           </div>`;
       }
-      if (this._pruneConfirming) {
+      if (this._maintConfirming.has(action.id)) {
         return `
           <div class="dc-maint-half" style="cursor:default">
             ${badge}
             <div class="dc-confirm-row">
-              <span class="dc-confirm-text">${this._t("overview.prune_confirm_text")}</span>
-              <button class="dc-confirm-btn yes" data-prune-confirm="${this._esc(entityId)}">${this._t("overview.prune_confirm")}</button>
-              <button class="dc-confirm-btn no" data-prune-cancel>${this._t("overview.prune_cancel")}</button>
+              <span class="dc-confirm-text">${this._t(action.confirmTextKey)}</span>
+              <button class="dc-confirm-btn yes" data-${action.dataPrefix}-confirm="${this._esc(action.entityId)}">${this._t("overview.prune_confirm")}</button>
+              <button class="dc-confirm-btn no" data-${action.dataPrefix}-cancel>${this._t("overview.prune_cancel")}</button>
             </div>
           </div>`;
       }
       return `
         <div class="dc-maint-half"
           role="button" tabindex="0"
-          aria-label="${this._t("overview.prune_aria")}"
-          data-prune-arm="${this._esc(entityId)}">
+          aria-label="${this._t(action.ariaKey)}"
+          data-${action.dataPrefix}-arm="${this._esc(action.entityId)}">
           ${badge}
           <div class="dc-ov-text">
-            <div class="dc-ov-label">${this._t("overview.prune_images")}</div>
-            <div class="dc-ov-value prune-action">${this._t("overview.prune_now")}</div>
+            <div class="dc-ov-label">${this._t(action.labelKey)}</div>
+            <div class="dc-ov-value prune-action">${this._t(action.nowKey)}</div>
           </div>
         </div>`;
     }
@@ -1686,38 +1776,47 @@
           if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handler(); }
         });
       });
-      // Prune images — arm the inline confirm step, cancel it, or actually run it.
-      this.querySelectorAll("[data-prune-arm]").forEach((el) => {
-        const arm = () => {
-          this._pruneConfirming = true;
-          this._pendingFocusSelector = "[data-prune-cancel]";
-          this.render();
-        };
-        el.addEventListener("click", arm);
-        el.addEventListener("keydown", (e) => {
-          if (e.key === "Enter" || e.key === " ") { e.preventDefault(); arm(); }
+      // Maintenance actions (Prune Images/Volumes/Networks) — arm the inline
+      // confirm step, cancel it, or actually run it. Generalized (#17) from
+      // the original Prune Images-only handlers; each configured action gets
+      // its own arm/cancel/confirm selectors via its dataPrefix.
+      this._maintenanceActions().forEach((action) => {
+        const armSel = `[data-${action.dataPrefix}-arm]`;
+        const cancelSel = `[data-${action.dataPrefix}-cancel]`;
+        const confirmSel = `[data-${action.dataPrefix}-confirm]`;
+        const confirmDatasetKey = `${action.dataPrefix.replace(/-([a-z])/g, (_, c) => c.toUpperCase())}Confirm`;
+        this.querySelectorAll(armSel).forEach((el) => {
+          const arm = () => {
+            this._maintConfirming.add(action.id);
+            this._pendingFocusSelector = cancelSel;
+            this.render();
+          };
+          el.addEventListener("click", arm);
+          el.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" || e.key === " ") { e.preventDefault(); arm(); }
+          });
         });
-      });
-      this.querySelector("[data-prune-cancel]")?.addEventListener("click", () => {
-        this._pruneConfirming = false;
-        this._pendingFocusSelector = "[data-prune-arm]";
-        this.render();
-      });
-      this.querySelector("[data-prune-confirm]")?.addEventListener("click", async (e) => {
-        const entityId = e.currentTarget.dataset.pruneConfirm;
-        if (this._prunePending || !entityId || !this._hass) return;
-        this._pruneConfirming = false;
-        this._prunePending = true;
-        this.render();
-        try {
-          await this._hass.callService("button", "press", { entity_id: entityId });
-          this._notify(this._t("notifications.prune_triggered"));
-        } catch (err) {
-          console.error("docker-card: prune failed", err);
-          this._notify(this._t("notifications.prune_failed"));
-        } finally {
-          setTimeout(() => { this._prunePending = false; this.render(); }, 3000);
-        }
+        this.querySelector(cancelSel)?.addEventListener("click", () => {
+          this._maintConfirming.delete(action.id);
+          this._pendingFocusSelector = armSel;
+          this.render();
+        });
+        this.querySelector(confirmSel)?.addEventListener("click", async (e) => {
+          const entityId = e.currentTarget.dataset[confirmDatasetKey];
+          if (this._maintPending.has(action.id) || !entityId || !this._hass) return;
+          this._maintConfirming.delete(action.id);
+          this._maintPending.add(action.id);
+          this.render();
+          try {
+            await this._hass.callService("button", "press", { entity_id: entityId });
+            this._notify(this._t(action.triggeredKey));
+          } catch (err) {
+            console.error(`docker-card: ${action.id} prune failed`, err);
+            this._notify(this._t(action.failedKey));
+          } finally {
+            setTimeout(() => { this._maintPending.delete(action.id); this.render(); }, 3000);
+          }
+        });
       });
       // Recreate container — same arm / cancel / confirm pattern as Prune, keyed per container.
       this.querySelectorAll("[data-recreate-arm]").forEach((el) => {

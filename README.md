@@ -131,6 +131,8 @@ This walks through the minimum needed to see one real container on the card. It 
 | `wud_last_poll` | WUD Monitor sensor — shows timestamp of last WUD scan |
 | `wud_scan` | WUD Monitor button — click to trigger an immediate scan of all containers |
 | `prune_images` | Portainer's "Prune unused images" button — removes unused Docker images from the endpoint. Asks for confirmation before running. Shares one tile with `wud_scan` when both are set |
+| `prune_volumes` | Portainer's "Prune unused volumes" button — same confirm-before-running flow as `prune_images`, in its own tile |
+| `prune_networks` | Portainer's "Prune unused networks" button — same confirm-before-running flow as `prune_images`, in its own tile |
 
 > [!NOTE]
 > **If `container_disk_usage` / `image_disk_usage` / `volume_disk_usage` stay stuck on `unknown` — or show as `unavailable` entirely — this is a known Portainer/Home Assistant limitation, not a card bug.** These sensors are populated via Docker's `docker system df` command, which is [documented to be slow on overlay2 filesystems](https://github.com/home-assistant/core/issues/165617) — common on Linux and NAS Docker hosts. If it exceeds the integration's timeout, those specific sensors either stay `unknown` or are marked `unavailable` outright (both outcomes are reported against the same upstream issue), while the rest of the integration keeps working normally. Home Assistant closed the upstream issue as "not planned," so there's currently no fix on their side either. You can confirm this is the cause by running `time docker system df` on your Docker host — if it takes more than a few seconds, that's why.
@@ -316,6 +318,14 @@ Pairs well with `image_disk_usage` in `docker_overview` — watch the number dro
 > [!WARNING]
 > **Pruning may silently leave tagged-but-unused images behind — this is a known Portainer integration bug, not a card bug.** [home-assistant/core#179542](https://github.com/home-assistant/core/issues/179542) confirms the integration's `prune_images` action doesn't correctly pass its `dangling: false` filter to Portainer's API — calling Portainer's own API directly with the same parameters prunes correctly, so the bug is in the integration, not Portainer or this card. No fix as of this writing. If images you expect to be removed remain after pruning, this is why.
 
+Portainer also exposes `button.*_prune_volumes` and `button.*_prune_networks` entities — add them as `prune_volumes` / `prune_networks` in `docker_overview` for the same confirm-before-running flow. Unlike `prune_images`, they don't share the WUD tile — each renders in its own standalone tile:
+```yaml
+docker_overview:
+  prune_images: button.portainer_local_prune_images
+  prune_volumes: button.portainer_local_prune_volumes
+  prune_networks: button.portainer_local_prune_networks
+```
+
 ## Full example configuration
 Everything above, combined into one card:
 ```yaml
@@ -456,6 +466,10 @@ shell_command:
 ## Changelog
 
 ### 3.8
+**Generalized the Prune confirm pattern to Volumes and Networks** — [#17](https://github.com/johro897/docker-card-extended/issues/17)
+- New `prune_volumes` / `prune_networks` `docker_overview` options, reusing the same arm → inline confirm → pending flow as `prune_images` (#7)
+- Each renders in its own standalone tile; `prune_images` keeps sharing a tile with `wud_scan` exactly as before
+
 **Aggregate updates overview tile** — [#16](https://github.com/johro897/docker-card-extended/issues/16)
 - New opt-in `updates_summary: true` card option adds an "N updates available" tile to the overview grid, counting containers whose `update_entity` currently reports an available update
 - Off by default; the tile is also hidden automatically when the count is `0`, so it never adds noise when everything is up to date

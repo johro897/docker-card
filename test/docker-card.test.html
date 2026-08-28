@@ -416,6 +416,67 @@
     assertEqual(calls[0].data.entity_id, 'button.docker_prune');
   });
 
+  // ---------------------------------------------------------------------
+  // Generalized maintenance actions (#17) — Prune Volumes / Networks reuse
+  // the same arm -> confirm -> service call flow, keyed independently.
+  // ---------------------------------------------------------------------
+  test('Prune Volumes: arm/confirm calls button.press on the configured volumes entity', async () => {
+    const card = freshCard();
+    card.setConfig({ containers: [], docker_overview: { prune_volumes: 'button.docker_prune_volumes' } });
+    const { hass, calls } = fakeHass({});
+    card.hass = hass;
+    card.querySelector('[data-prune-volumes-arm]').click();
+    assertTrue(!!card.querySelector('[data-prune-volumes-confirm]'), 'expected the confirm step to appear after arming');
+    card.querySelector('[data-prune-volumes-confirm]').click();
+    await wait(10);
+    assertEqual(calls[0].domain, 'button');
+    assertEqual(calls[0].service, 'press');
+    assertEqual(calls[0].data.entity_id, 'button.docker_prune_volumes');
+  });
+
+  test('Prune Networks: arm/confirm calls button.press on the configured networks entity', async () => {
+    const card = freshCard();
+    card.setConfig({ containers: [], docker_overview: { prune_networks: 'button.docker_prune_networks' } });
+    const { hass, calls } = fakeHass({});
+    card.hass = hass;
+    card.querySelector('[data-prune-networks-arm]').click();
+    card.querySelector('[data-prune-networks-confirm]').click();
+    await wait(10);
+    assertEqual(calls[0].data.entity_id, 'button.docker_prune_networks');
+  });
+
+  test('Maintenance actions: Images, Volumes and Networks can each be armed independently without cross-talk', () => {
+    const card = freshCard();
+    card.setConfig({
+      containers: [],
+      docker_overview: {
+        prune_images: 'button.docker_prune_images',
+        prune_volumes: 'button.docker_prune_volumes',
+        prune_networks: 'button.docker_prune_networks',
+      },
+    });
+    card.hass = fakeHass({}).hass;
+    card.querySelector('[data-prune-volumes-arm]').click();
+    assertTrue(!!card.querySelector('[data-prune-volumes-confirm]'), 'volumes should be armed');
+    assertTrue(!!card.querySelector('[data-prune-arm]'), 'images should still be idle');
+    assertTrue(!!card.querySelector('[data-prune-networks-arm]'), 'networks should still be idle');
+  });
+
+  test('Maintenance: Prune Images still shares one tile with WUD scan when both are configured; Volumes/Networks get their own tiles', () => {
+    const card = freshCard();
+    card.setConfig({
+      containers: [],
+      docker_overview: {
+        wud_scan: 'button.wud_scan_all',
+        prune_images: 'button.docker_prune_images',
+        prune_volumes: 'button.docker_prune_volumes',
+      },
+    });
+    card.hass = fakeHass({}).hass;
+    assertEqual(card.querySelectorAll('.dc-maint').length, 1, 'WUD + Prune Images should still share exactly one .dc-maint tile');
+    assertTrue(!!card.querySelector('[data-prune-volumes-arm]'), 'Prune Volumes should render in its own standalone tile');
+  });
+
   test('Prune: Cancel returns to the idle "Prune now" state without calling anything', () => {
     const card = freshCard();
     card.setConfig({ containers: [], docker_overview: { prune_images: 'button.docker_prune' } });
