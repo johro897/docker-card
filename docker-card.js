@@ -45,6 +45,7 @@
         os_aria: "Open operating system details",
         wud_last_poll_aria: "Open WUD last poll details",
         wud_scan_aria: "Trigger WUD scan now",
+        updates_available: "Updates available",
         container_disk: "Container Disk",
         container_disk_aria: "Open container disk usage details",
         image_disk: "Image Disk",
@@ -143,6 +144,7 @@
         os_aria: "Öppna detaljer för operativsystem",
         wud_last_poll_aria: "Öppna detaljer för senaste WUD-poll",
         wud_scan_aria: "Utlös WUD-skanning nu",
+        updates_available: "Uppdateringar tillgängliga",
         container_disk: "Containerdisk",
         container_disk_aria: "Öppna detaljer för containerns diskanvändning",
         image_disk: "Image-disk",
@@ -241,6 +243,7 @@
         os_aria: "Details zum Betriebssystem öffnen",
         wud_last_poll_aria: "Details zum letzten WUD-Abruf öffnen",
         wud_scan_aria: "WUD-Scan jetzt auslösen",
+        updates_available: "Updates verfügbar",
         container_disk: "Container-Speicher",
         container_disk_aria: "Details zur Container-Speichernutzung öffnen",
         image_disk: "Image-Speicher",
@@ -339,6 +342,7 @@
         os_aria: "Ouvrir les détails du système d'exploitation",
         wud_last_poll_aria: "Ouvrir les détails du dernier scan WUD",
         wud_scan_aria: "Déclencher un scan WUD maintenant",
+        updates_available: "Mises à jour disponibles",
         container_disk: "Disque du conteneur",
         container_disk_aria: "Ouvrir les détails d'utilisation disque du conteneur",
         image_disk: "Disque des images",
@@ -492,6 +496,7 @@
         running_color: "var(--state-active-color, #2e8f57)",
         not_running_color: "var(--state-error-color, #c22040)",
         paused_color: "var(--state-warning-color, #f4b942)",
+        updates_summary: false,        // opt-in aggregate "N updates available" overview tile
         // ── Graph options (opt-in) ──
         graphs: false,                 // enable CPU/Memory sparklines (card-level default)
         graph_hours: 2,                // history window in hours
@@ -1148,6 +1153,19 @@
           entityId: oc.wud_last_poll,
           aria: this._t("overview.wud_last_poll_aria"),
         });
+      }
+      // Aggregate "N updates available" tile — opt-in via updates_summary: true,
+      // counts containers whose update_entity currently reports an available
+      // update (same detection _getUpdateInfo already does per row).
+      if (this.config.updates_summary) {
+        const updateCount = (this.config.containers || [])
+          .filter((c) => {
+            const info = this._getUpdateInfo(c);
+            return info && !info.error;
+          }).length;
+        if (updateCount > 0) {
+          items.push({ label: this._t("overview.updates_available"), value: String(updateCount), badge: "UPD" });
+        }
       }
       if (!items.length && !oc.wud_scan && !oc.prune_images) return "";
       let html = `<div class="dc-overview">`;

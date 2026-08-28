@@ -109,6 +109,7 @@ This walks through the minimum needed to see one real container on the card. It 
 | `graph_refresh` | No | `300` | Minimum seconds between history refetches per entity — overridable per container (floor: `30`, lower values are raised automatically) |
 | `graph_cpu_color` | No | `var(--primary-color)` | Line/area color for CPU graphs — overridable per container |
 | `graph_memory_color` | No | `var(--accent-color)` | Line/area color for Memory graphs — overridable per container |
+| `updates_summary` | No | `false` | Add an aggregate "N updates available" overview tile, counting containers with a pending WUD update. Hidden when the count is `0` |
 | `docker_overview` | No | — | High-level Docker host stats |
 | `containers` | **Yes** | — | Array of container definitions |
 
@@ -455,6 +456,10 @@ shell_command:
 ## Changelog
 
 ### 3.8
+**Aggregate updates overview tile** — [#16](https://github.com/johro897/docker-card-extended/issues/16)
+- New opt-in `updates_summary: true` card option adds an "N updates available" tile to the overview grid, counting containers whose `update_entity` currently reports an available update
+- Off by default; the tile is also hidden automatically when the count is `0`, so it never adds noise when everything is up to date
+
 **Fix: language auto-detection was silently broken** — [#22](https://github.com/johro897/docker-card-extended/issues/22)
 - The card had a full translation mechanism, but it was built to fetch separate `translations/<lang>.json` files at runtime — HACS's plugin category only ever distributes the single file named in `hacs.json`, so those files never reached a real install and the card has only ever rendered English, regardless of your HA instance's language
 - Fixed by bundling English, Swedish, German, and French directly in the card file, matching the pattern already used by this project's other five cards

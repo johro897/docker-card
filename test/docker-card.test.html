@@ -360,6 +360,46 @@
   });
 
   // ---------------------------------------------------------------------
+  // Aggregate "N updates available" overview tile (updates_summary)
+  // ---------------------------------------------------------------------
+  test('updates_summary: off by default, no tile even when updates are pending', () => {
+    const card = freshCard();
+    card.setConfig({ containers: [baseContainer({ update_entity: 'update.plex' })] });
+    card.hass = fakeHass({
+      states: { 'update.plex': { state: 'Yes', attributes: { new_version: '1.1' } } },
+    }).hass;
+    assertEqual(card.querySelectorAll('.dc-ov-item').length, 0);
+  });
+
+  test('updates_summary: true counts containers with a pending update, ignores ones without', () => {
+    const card = freshCard();
+    card.setConfig({
+      updates_summary: true,
+      containers: [
+        baseContainer({ update_entity: 'update.plex' }),
+        baseContainer({ name: 'sonarr', update_entity: 'update.sonarr' }),
+      ],
+    });
+    card.hass = fakeHass({
+      states: {
+        'update.plex': { state: 'Yes', attributes: { new_version: '1.1' } },
+        'update.sonarr': { state: 'No' },
+      },
+    }).hass;
+    const label = Array.from(card.querySelectorAll('.dc-ov-label')).find((el) => el.textContent === 'Updates available');
+    assertTrue(!!label, 'expected an "Updates available" tile');
+    assertEqual(label.nextElementSibling.textContent, '1');
+  });
+
+  test('updates_summary: true but zero pending updates hides the tile', () => {
+    const card = freshCard();
+    card.setConfig({ updates_summary: true, containers: [baseContainer({ update_entity: 'update.plex' })] });
+    card.hass = fakeHass({ states: { 'update.plex': { state: 'No' } } }).hass;
+    const label = Array.from(card.querySelectorAll('.dc-ov-label')).find((el) => el.textContent === 'Updates available');
+    assertTrue(!label, 'expected no tile when the count is 0');
+  });
+
+  // ---------------------------------------------------------------------
   // Prune flow — arm -> confirm -> service call (driven through real DOM clicks)
   // ---------------------------------------------------------------------
   test('Prune: arm shows the inline confirm step, Confirm calls button.press on the prune entity', async () => {
