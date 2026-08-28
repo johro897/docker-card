@@ -76,7 +76,7 @@
         collapse_containers: "Collapse container list",
         expand_containers: "Expand container list",
       },
-      resources: { cpu: "CPU", memory: "Memory", no_history: "no history" },
+      resources: { cpu: "CPU", memory: "Memory", network: "Network", no_history: "no history" },
       actions: {
         start: "start",
         stop: "stop",
@@ -189,7 +189,7 @@
         collapse_containers: "Fäll ihop containerlistan",
         expand_containers: "Expandera containerlistan",
       },
-      resources: { cpu: "CPU", memory: "Minne", no_history: "ingen historik" },
+      resources: { cpu: "CPU", memory: "Minne", network: "Nätverk", no_history: "ingen historik" },
       actions: {
         start: "starta",
         stop: "stoppa",
@@ -302,7 +302,7 @@
         collapse_containers: "Containerliste einklappen",
         expand_containers: "Containerliste ausklappen",
       },
-      resources: { cpu: "CPU", memory: "Arbeitsspeicher", no_history: "kein Verlauf" },
+      resources: { cpu: "CPU", memory: "Arbeitsspeicher", network: "Netzwerk", no_history: "kein Verlauf" },
       actions: {
         start: "starten",
         stop: "stoppen",
@@ -415,7 +415,7 @@
         collapse_containers: "Réduire la liste des conteneurs",
         expand_containers: "Développer la liste des conteneurs",
       },
-      resources: { cpu: "CPU", memory: "Mémoire", no_history: "aucun historique" },
+      resources: { cpu: "CPU", memory: "Mémoire", network: "Réseau", no_history: "aucun historique" },
       actions: {
         start: "démarrer",
         stop: "arrêter",
@@ -562,6 +562,8 @@
         graph_refresh: 300,            // seconds between history refetches per entity
         graph_cpu_color: "var(--primary-color, #03a9f4)",
         graph_memory_color: "var(--accent-color, #ff9800)",
+        graph_network_rx_color: "var(--info-color, #039be5)",
+        graph_network_tx_color: "var(--warning-color, #ff9800)",
         ...nc,
         containers,
       };
@@ -911,6 +913,12 @@
           font-weight: 600;
           color: var(--primary-text-color);
           white-space: nowrap;
+        }
+        /* Network graph header: RX/TX shown as two colored values side by side (#19) */
+        .dc-graph-dual-value {
+          display: flex;
+          align-items: baseline;
+          gap: 0.5rem;
         }
         .dc-graph-svg {
           display: block;
@@ -1500,6 +1508,52 @@
         <polyline points="${line}" fill="none" stroke="${color}" stroke-width="1.5" vector-effect="non-scaling-stroke"></polyline>
       </svg>`;
     }
+    /**
+     * Two-series variant of _sparklineSvg, for Network I/O (#19): draws RX and
+     * TX as two lines sharing one y-scale, no area fill (an overlapping fill
+     * per line would just muddy which line is which). Used only when BOTH
+     * network_rx_entity and network_tx_entity have history — a single
+     * configured direction still uses the plain single-line _sparklineSvg.
+     */
+    _dualSparklineSvg(pointsA, pointsB, colorA, colorB) {
+      const W = 200, H = 40;
+      const maxPts = 120;
+      const downsample = (points) => {
+        if (points.length <= maxPts) return points;
+        const step = points.length / maxPts;
+        const ds = [];
+        for (let i = 0; i < maxPts; i++) ds.push(points[Math.floor(i * step)]);
+        ds.push(points[points.length - 1]);
+        return ds;
+      };
+      const a = downsample(pointsA);
+      const b = downsample(pointsB);
+      const allPts = a.concat(b);
+      const t0 = Math.min(...allPts.map((p) => p[0]));
+      const t1 = Math.max(...allPts.map((p) => p[0]));
+      const span = Math.max(1, t1 - t0);
+      const vMin = 0;
+      const vMax = Math.max(...allPts.map((p) => p[1]), 0.1) * 1.1;
+      const x = (t) => (((t - t0) / span) * W);
+      const y = (v) => H - ((v - vMin) / (vMax - vMin)) * (H - 3) - 1.5;
+      const lineOf = (pts) => pts.map(([t, v]) => `${x(t).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+      const bounds = this._dayBoundaries(t0, t1);
+      const gridAt = (bounds.length && bounds.length <= 6)
+        ? bounds.map((gb) => x(gb))
+        : [W / 2];
+      const grid = gridAt.map((gx) => `<line x1="${gx.toFixed(1)}" y1="0" x2="${gx.toFixed(1)}" y2="${H}"
+        stroke="var(--divider-color, rgba(128,128,128,0.35))" stroke-width="1"
+        stroke-dasharray="2 3" vector-effect="non-scaling-stroke" opacity="0.6"></line>`).join("");
+      const lineA = a.length >= 2
+        ? `<polyline points="${lineOf(a)}" fill="none" stroke="${colorA}" stroke-width="1.5" vector-effect="non-scaling-stroke"></polyline>` : "";
+      const lineB = b.length >= 2
+        ? `<polyline points="${lineOf(b)}" fill="none" stroke="${colorB}" stroke-width="1.5" vector-effect="non-scaling-stroke"></polyline>` : "";
+      return `<svg class="dc-graph-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
+        ${grid}
+        ${lineA}
+        ${lineB}
+      </svg>`;
+    }
     _locale() {
       return this._hass?.locale?.language || this._hass?.language || undefined;
     }
@@ -1615,6 +1669,61 @@
         const color = container.graph_memory_color || this.config.graph_memory_color;
         blocks.push(make(container.memory_entity, this._t("resources.memory"), memValue, color));
       }
+      // Network I/O (#19): download (RX) and upload (TX) are two directions of
+      // one metric, so — unlike CPU/Memory — both entities are optional and
+      // independent. Which one(s) to show is controlled purely by which
+      // entities you configure: only network_rx_entity → a single RX line
+      // (same look as CPU/Memory); both → one graph with two lines sharing a
+      // y-scale, via _dualSparklineSvg.
+      if (container.network_rx_entity || container.network_tx_entity) {
+        const rxColor = container.graph_network_rx_color || this.config.graph_network_rx_color;
+        const txColor = container.graph_network_tx_color || this.config.graph_network_tx_color;
+        const rxEntityId = container.network_rx_entity;
+        const txEntityId = container.network_tx_entity;
+        const rxE = rxEntityId ? this._getEntity(rxEntityId) : undefined;
+        const txE = txEntityId ? this._getEntity(txEntityId) : undefined;
+        let rxPts = rxEntityId ? this._historyPoints(rxEntityId, hours, refreshSec) : undefined;
+        let txPts = txEntityId ? this._historyPoints(txEntityId, hours, refreshSec) : undefined;
+        const rxLive = rxE ? parseFloat(rxE.state) : NaN;
+        const txLive = txE ? parseFloat(txE.state) : NaN;
+        if (rxPts && Number.isFinite(rxLive)) rxPts = rxPts.concat([[Date.now(), rxLive]]);
+        if (txPts && Number.isFinite(txLive)) txPts = txPts.concat([[Date.now(), txLive]]);
+        const rxHas = rxPts && rxPts.length >= 2;
+        const txHas = txPts && txPts.length >= 2;
+        const rxVal = rxE ? this._fmtResourceValue(rxE) : null;
+        const txVal = txE ? this._fmtResourceValue(txE) : null;
+        let body, axis;
+        if (rxHas && txHas) {
+          body = this._dualSparklineSvg(rxPts, txPts, rxColor, txColor).replace("<svg ", `<svg${hStyle} `);
+          const t0 = Math.min(rxPts[0][0], txPts[0][0]);
+          const t1 = Math.max(rxPts[rxPts.length - 1][0], txPts[txPts.length - 1][0]);
+          axis = this._axisHtml([[t0, 0], [t1, 0]]);
+        } else if (rxHas) {
+          body = this._sparklineSvg(rxPts, rxColor).replace("<svg ", `<svg${hStyle} `);
+          axis = this._axisHtml(rxPts);
+        } else if (txHas) {
+          body = this._sparklineSvg(txPts, txColor).replace("<svg ", `<svg${hStyle} `);
+          axis = this._axisHtml(txPts);
+        } else {
+          body = `<div class="dc-graph-empty"${hStyle}>${this._t("resources.no_history")}</div>`;
+          axis = "";
+        }
+        const valueHtml = (rxEntityId && txEntityId)
+          ? `<span class="dc-graph-dual-value">
+               <span class="dc-graph-value" style="color:${rxColor}">&darr; ${this._esc(rxVal || "—")}</span>
+               <span class="dc-graph-value" style="color:${txColor}">&uarr; ${this._esc(txVal || "—")}</span>
+             </span>`
+          : `<span class="dc-graph-value">${this._esc((rxVal || txVal) || "—")}</span>`;
+        blocks.push(`
+          <div class="dc-graph">
+            <div class="dc-graph-head">
+              <span class="dc-graph-label">${this._t("resources.network")}</span>
+              ${valueHtml}
+            </div>
+            ${body}
+            ${axis}
+          </div>`);
+      }
       if (!blocks.length) return "";
       return `<div class="dc-graphs">${blocks.join("")}</div>`;
     }
@@ -1663,7 +1772,7 @@
       const memV = memE ? this._fmtResourceValue(memE) : null;
       // graphs: per-container override, falls back to card-level config
       const graphsEnabled = c.graphs !== undefined ? Boolean(c.graphs) : Boolean(this.config.graphs);
-      if (graphsEnabled && (c.cpu_entity || c.memory_entity)) {
+      if (graphsEnabled && (c.cpu_entity || c.memory_entity || c.network_rx_entity || c.network_tx_entity)) {
         graphHtml = this._renderResourceGraphs(c, cpuV, memV);
       } else if (cpuV || memV) {
         resHtml = `<div class="dc-resources">
@@ -2253,7 +2362,7 @@
         "status_entity", "control_entity", "switch_entity",
         "restart_entity", "pause_entity", "resume_entity", "recreate_entity",
         "cpu_entity", "memory_entity", "image_version_entity", "health_entity",
-        "update_entity",
+        "update_entity", "network_rx_entity", "network_tx_entity",
       ];
       (this.config?.containers || []).forEach((c) => {
         containerEntityFields.forEach((f) => { if (c[f]) ids.add(c[f]); });

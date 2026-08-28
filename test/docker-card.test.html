@@ -60,7 +60,7 @@
     return el;
   }
 
-  function fakeHass({ states = {}, language = 'en', callServiceImpl } = {}) {
+  function fakeHass({ states = {}, language = 'en', callServiceImpl, callApiImpl } = {}) {
     const calls = [];
     const hass = {
       states,
@@ -70,9 +70,19 @@
         calls.push({ domain, service, data });
         return callServiceImpl ? callServiceImpl(domain, service, data) : Promise.resolve();
       },
-      callApi: () => Promise.resolve([[]]),
+      callApi: (method, url) => callApiImpl ? callApiImpl(method, url) : Promise.resolve([[]]),
     };
     return { hass, calls };
+  }
+
+  /** Builds a fake history/period response: a flat point every minute for `count` minutes, ending at value `end`. */
+  function fakeHistory(count, end) {
+    const now = Date.now();
+    const points = [];
+    for (let i = count - 1; i >= 0; i--) {
+      points.push({ last_changed: new Date(now - i * 60000).toISOString(), state: String(end) });
+    }
+    return [points];
   }
 
   function baseContainer(overrides = {}) {
@@ -397,6 +407,58 @@
     card.hass = fakeHass({ states: { 'update.plex': { state: 'No' } } }).hass;
     const label = Array.from(card.querySelectorAll('.dc-ov-label')).find((el) => el.textContent === 'Updates available');
     assertTrue(!label, 'expected no tile when the count is 0');
+  });
+
+  // ---------------------------------------------------------------------
+  // Network I/O graphs (#19) — which direction(s) render is controlled purely
+  // by which of network_rx_entity/network_tx_entity is configured.
+  // ---------------------------------------------------------------------
+  test('Network graph: graphs enable even with no cpu_entity/memory_entity configured, using only network entities', () => {
+    const card = freshCard();
+    card.setConfig({ graphs: true, containers: [baseContainer({ network_rx_entity: 'sensor.plex_net_rx' })] });
+    card.hass = fakeHass({ states: { 'sensor.plex_net_rx': { state: '4.2', attributes: { unit_of_measurement: 'MB/s' } } } }).hass;
+    assertTrue(!!card.querySelector('.dc-graphs'), 'expected the graphs container to render');
+    const label = Array.from(card.querySelectorAll('.dc-graph-label')).find((el) => el.textContent === 'Network');
+    assertTrue(!!label, 'expected a Network graph block');
+  });
+
+  test('Network graph: only network_rx_entity configured renders a single-line graph (with area fill) and a plain value', async () => {
+    const card = freshCard();
+    card.setConfig({ graphs: true, containers: [baseContainer({ network_rx_entity: 'sensor.plex_net_rx' })] });
+    card.hass = fakeHass({
+      states: { 'sensor.plex_net_rx': { state: '4.2', attributes: { unit_of_measurement: 'MB/s' } } },
+      callApiImpl: () => Promise.resolve(fakeHistory(10, 3)),
+    }).hass;
+    await wait(100);
+    const graph = Array.from(card.querySelectorAll('.dc-graph')).find((el) => el.querySelector('.dc-graph-label')?.textContent === 'Network');
+    assertTrue(!!graph, 'expected the Network graph block');
+    assertEqual(graph.querySelectorAll('polygon').length, 1, 'a single configured direction should still use the area-filled single-line style');
+    assertEqual(graph.querySelectorAll('polyline').length, 1);
+    assertTrue(graph.querySelector('.dc-graph-value').textContent.includes('4.2'), 'expected the live RX value in the header');
+  });
+
+  test('Network graph: both network_rx_entity and network_tx_entity render two lines sharing one graph, no area fill, with down/up labeled values', async () => {
+    const card = freshCard();
+    card.setConfig({
+      graphs: true,
+      containers: [baseContainer({ network_rx_entity: 'sensor.plex_net_rx', network_tx_entity: 'sensor.plex_net_tx' })],
+    });
+    card.hass = fakeHass({
+      states: {
+        'sensor.plex_net_rx': { state: '3.1', attributes: { unit_of_measurement: 'MB/s' } },
+        'sensor.plex_net_tx': { state: '1.1', attributes: { unit_of_measurement: 'MB/s' } },
+      },
+      callApiImpl: () => Promise.resolve(fakeHistory(10, 2)),
+    }).hass;
+    await wait(100);
+    const graph = Array.from(card.querySelectorAll('.dc-graph')).find((el) => el.querySelector('.dc-graph-label')?.textContent === 'Network');
+    assertTrue(!!graph, 'expected the Network graph block');
+    assertEqual(graph.querySelectorAll('polygon').length, 0, 'the dual-line style must not draw an area fill');
+    assertEqual(graph.querySelectorAll('polyline').length, 2, 'expected two lines, one per direction');
+    const values = graph.querySelectorAll('.dc-graph-dual-value .dc-graph-value');
+    assertEqual(values.length, 2);
+    assertTrue(values[0].textContent.includes('3.1'), 'expected the RX value with a down arrow');
+    assertTrue(values[1].textContent.includes('1.1'), 'expected the TX value with an up arrow');
   });
 
   // ---------------------------------------------------------------------

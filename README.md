@@ -13,6 +13,7 @@ An extended version of Docker Card, inspired by [vineetchoudhary/lovelace-docker
 - [Pause / Resume](#pause--resume)
 - [Recreate container](#recreate-container)
 - [Resource graphs (CPU / Memory)](#resource-graphs-cpu--memory)
+- [Network I/O graphs](#network-io-graphs)
 - [WUD integration](#wud-integration)
 - [Full example configuration](#full-example-configuration)
 - [Styling](#styling)
@@ -109,6 +110,8 @@ This walks through the minimum needed to see one real container on the card. It 
 | `graph_refresh` | No | `300` | Minimum seconds between history refetches per entity — overridable per container (floor: `30`, lower values are raised automatically) |
 | `graph_cpu_color` | No | `var(--primary-color)` | Line/area color for CPU graphs — overridable per container |
 | `graph_memory_color` | No | `var(--accent-color)` | Line/area color for Memory graphs — overridable per container |
+| `graph_network_rx_color` | No | `var(--info-color)` | Line color for the Network RX (download) line — overridable per container |
+| `graph_network_tx_color` | No | `var(--warning-color)` | Line color for the Network TX (upload) line — overridable per container |
 | `updates_summary` | No | `false` | Add an aggregate "N updates available" overview tile, counting containers with a pending WUD update. Hidden when the count is `0` |
 | `docker_overview` | No | — | High-level Docker host stats |
 | `containers` | **Yes** | — | Array of container definitions |
@@ -158,6 +161,10 @@ This walks through the minimum needed to see one real container on the card. It 
 | `graph_refresh` | No | Per-container minimum seconds between history refetches |
 | `graph_cpu_color` | No | Per-container override for CPU graph color |
 | `graph_memory_color` | No | Per-container override for Memory graph color |
+| `network_rx_entity` | No | Sensor for network download (RX) throughput. Configure with `network_tx_entity` for a two-line graph, or on its own for a single-line one — see [Network I/O graphs](#network-io-graphs) |
+| `network_tx_entity` | No | Sensor for network upload (TX) throughput — see [Network I/O graphs](#network-io-graphs) |
+| `graph_network_rx_color` | No | Per-container override for the Network RX line color |
+| `graph_network_tx_color` | No | Per-container override for the Network TX line color |
 | `image_version_entity` | No | Sensor showing the current image tag/version |
 | `health_entity` | No | Sensor for container health (`healthy`, `unhealthy`, `starting`) |
 | `update_entity` | No | WUD Monitor sensor for update tracking — requires WUD + WUD Monitor integration |
@@ -264,6 +271,25 @@ Times and dates follow your Home Assistant language setting.
 
 > [!NOTE]
 > The `cpu_entity` / `memory_entity` sensors must be included in the [recorder](https://www.home-assistant.io/integrations/recorder/) — excluded entities have no history and the graph shows *no history* (the current value is still displayed). The axis reflects the data that actually exists, so a graph can be shorter than the window you asked for if the recorder has nothing older. With `graphs` omitted or `false`, the card behaves exactly as before.
+
+## Network I/O graphs
+Unlike CPU/Memory, network throughput has a direction — download (RX) and upload (TX) — so which line(s) you get is controlled purely by which sensors you configure:
+```yaml
+graphs: true
+containers:
+  - name: plex
+    status_entity: sensor.plex_status
+    control_entity: switch.plex
+    network_rx_entity: sensor.plex_network_rx    # optional on its own
+    network_tx_entity: sensor.plex_network_tx    # optional on its own
+```
+- Only `network_rx_entity` (or only `network_tx_entity`) set → a single-line graph, same look as CPU/Memory
+- Both set → one graph with two lines sharing a y-scale, labeled `↓ <value>` / `↑ <value>` in their own colors — no area fill, so the two lines stay readable where they cross
+
+**Colors** default to `var(--info-color)` for RX and `var(--warning-color)` for TX. Override globally with `graph_network_rx_color` / `graph_network_tx_color`, or per container with the same keys.
+
+> [!NOTE]
+> Same recorder requirement and `graphs: true` gate as CPU/Memory graphs above — network sensors aren't shown at all outside graph mode.
 
 ## WUD integration
 To use WUD update tracking and scan controls you need:
@@ -466,6 +492,11 @@ shell_command:
 ## Changelog
 
 ### 3.8
+**Network I/O graphs** — [#19](https://github.com/johro897/docker-card-extended/issues/19)
+- New `network_rx_entity` / `network_tx_entity` per-container options — configure one for a single-line graph, or both for a two-line RX/TX graph sharing a y-scale
+- New `graph_network_rx_color` / `graph_network_tx_color` options (card-level and per-container), defaulting to `var(--info-color)` / `var(--warning-color)`
+- Works standalone — `graphs: true` no longer requires `cpu_entity`/`memory_entity` to also be configured
+
 **Generalized the Prune confirm pattern to Volumes and Networks** — [#17](https://github.com/johro897/docker-card-extended/issues/17)
 - New `prune_volumes` / `prune_networks` `docker_overview` options, reusing the same arm → inline confirm → pending flow as `prune_images` (#7)
 - Each renders in its own standalone tile; `prune_images` keeps sharing a tile with `wud_scan` exactly as before
