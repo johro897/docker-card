@@ -496,7 +496,7 @@ shell_command:
 
 ## Changelog
 
-### 3.9
+### 3.9.0
 **Network I/O graphs** — [#19](https://github.com/johro897/docker-card-extended/issues/19)
 - New `network_rx_entity` / `network_tx_entity` per-container options — configure one for a single-line graph, or both for a two-line RX/TX graph sharing a y-scale
 - New `graph_network_rx_color` / `graph_network_tx_color` options (card-level and per-container), defaulting to `var(--info-color)` / `var(--warning-color)`
