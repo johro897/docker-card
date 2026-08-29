@@ -352,6 +352,9 @@ docker_overview:
   prune_networks: button.portainer_local_prune_networks
 ```
 
+> [!WARNING]
+> **`prune_volumes` may fail outright with "An error occurred while trying to connect to the Portainer instance" — a separate, unrelated suspected Portainer integration issue from the tagged-images bug above, not confirmed as a card bug.** Where the images bug above prunes *silently incompletely*, this one is a hard failure on every attempt. The card's Confirm button calls the exact same `button.press` service call as `prune_images`/`wud_scan`, both of which work reliably, and Portainer's own data coordinator keeps polling successfully in the same log window — so this isn't a real connectivity problem. Comparing the underlying [`pyportainer`](https://github.com/erwindouna/pyportainer) library's `prune_volumes()` against the already-working `images_prune()` shows one concrete difference: `prune_volumes` sends a redundant `endpointId` query parameter (the endpoint ID is already in the URL path) alongside `all`, which `images_prune` doesn't do. That's a plausible cause, but unconfirmed — Home Assistant's generic error message swallows the actual underlying exception. If you hit this, the button press itself and this card are not the problem.
+
 ## Full example configuration
 Everything above, combined into one card:
 ```yaml
@@ -486,6 +489,7 @@ shell_command:
 | Scan button not working | Verify the WUD Monitor integration is installed and `wud_scan` points to the correct `button.*` entity |
 | Prune button not working | Verify `prune_images` points to a valid Portainer `button.*_prune_images` entity and that the Portainer integration is connected |
 | Pruning runs but tagged images stay behind | Known Portainer integration bug, not a card bug — see the warning in [Prune unused images](#prune-unused-images) ([home-assistant/core#179542](https://github.com/home-assistant/core/issues/179542)) |
+| Prune Volumes fails with "error occurred while trying to connect to the Portainer instance" | A separate, unrelated suspected Portainer integration issue from the tagged-images bug above (this one is a hard failure, not silently incomplete pruning) — not a confirmed card bug. See the second warning under [Prune unused images](#prune-unused-images) |
 | Recreate button missing | Add `recreate_entity` pointing to the container's Portainer recreate `button.*` entity |
 | Recreate doesn't seem to update the container | Expected if the image tag is pinned (e.g. `:1.4.2`) — see the note in [Recreate container](#recreate-container). Only mutable tags like `:latest` actually change |
 | Disk usage tiles stuck on "—" / entity shows `unknown` or `unavailable` | Known upstream Portainer/HA limitation, not a card bug — see the note under [docker_overview options](#docker_overview-options). `docker system df` is slow on overlay2 filesystems and can time out ([tracked upstream](https://github.com/home-assistant/core/issues/165617), closed as not planned) |
