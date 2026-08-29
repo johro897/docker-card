@@ -112,7 +112,6 @@ This walks through the minimum needed to see one real container on the card. It 
 | `graph_memory_color` | No | `var(--accent-color)` | Line/area color for Memory graphs — overridable per container |
 | `graph_network_rx_color` | No | `var(--info-color)` | Line color for the Network RX (download) line — overridable per container |
 | `graph_network_tx_color` | No | `var(--warning-color)` | Line color for the Network TX (upload) line — overridable per container |
-| `updates_summary` | No | `false` | Add an aggregate "N updates available" overview tile, counting containers with a pending WUD update. Hidden when the count is `0` |
 | `docker_overview` | No | — | High-level Docker host stats |
 | `containers` | **Yes** | — | Array of container definitions |
 
@@ -133,9 +132,10 @@ This walks through the minimum needed to see one real container on the card. It 
 | `volume_disk_usage` | Portainer sensor — total disk space used by volumes. See note below if it stays `unknown`/`unavailable` |
 | `wud_last_poll` | WUD Monitor sensor — shows timestamp of last WUD scan |
 | `wud_scan` | WUD Monitor button — click to trigger an immediate scan of all containers |
-| `prune_images` | Portainer's "Prune unused images" button — removes unused Docker images from the endpoint. Asks for confirmation before running. Shares one tile with `wud_scan` when both are set |
+| `prune_images` | Portainer's "Prune unused images" button — removes unused Docker images from the endpoint. Asks for confirmation before running. Shares one tile with `wud_scan` *only* when it's the sole maintenance action configured (no `prune_volumes`/`prune_networks`) — with more than one maintenance action set, all of them (including this one) render as their own standalone tile, for consistency |
 | `prune_volumes` | Portainer's "Prune unused volumes" button — same confirm-before-running flow as `prune_images`, in its own tile |
 | `prune_networks` | Portainer's "Prune unused networks" button — same confirm-before-running flow as `prune_images`, in its own tile |
+| `updates_summary` | Add an aggregate "N updates available" tile, counting containers with a pending WUD update. Hidden when the count is `0` |
 
 > [!NOTE]
 > **If `container_disk_usage` / `image_disk_usage` / `volume_disk_usage` stay stuck on `unknown` — or show as `unavailable` entirely — this is a known Portainer/Home Assistant limitation, not a card bug.** These sensors are populated via Docker's `docker system df` command, which is [documented to be slow on overlay2 filesystems](https://github.com/home-assistant/core/issues/165617) — common on Linux and NAS Docker hosts. If it exceeds the integration's timeout, those specific sensors either stay `unknown` or are marked `unavailable` outright (both outcomes are reported against the same upstream issue), while the rest of the integration keeps working normally. Home Assistant closed the upstream issue as "not planned," so there's currently no fix on their side either. You can confirm this is the cause by running `time docker system df` on your Docker host — if it takes more than a few seconds, that's why.
@@ -335,7 +335,7 @@ docker_overview:
   wud_scan: button.wud_wud_force_scan_all
   prune_images: button.portainer_local_prune_images
 ```
-When both `wud_scan` and `prune_images` are set they share one overview tile, split by a divider — the two maintenance actions live together instead of being scattered among the stat tiles. With only one of the two configured, it renders alone exactly as `wud_scan` always has.
+When both `wud_scan` and `prune_images` are set — and `prune_images` is the *only* maintenance action configured — they share one overview tile, split by a divider. Add `prune_volumes` and/or `prune_networks` (see below) and the sharing stops: every maintenance action, `prune_images` included, then gets its own standalone tile, so you don't end up with one action singled out into a shared tile while the others sit apart.
 
 Clicking **Prune now** doesn't fire immediately — it swaps to an inline "Remove unused images?" confirmation with **Confirm** / **Cancel**, since this is a destructive action. Confirming calls `button.press` on the configured entity and shows "Pruning…" for 3 seconds.
 
@@ -344,7 +344,7 @@ Pairs well with `image_disk_usage` in `docker_overview` — watch the number dro
 > [!WARNING]
 > **Pruning may silently leave tagged-but-unused images behind — this is a known Portainer integration bug, not a card bug.** [home-assistant/core#179542](https://github.com/home-assistant/core/issues/179542) confirms the integration's `prune_images` action doesn't correctly pass its `dangling: false` filter to Portainer's API — calling Portainer's own API directly with the same parameters prunes correctly, so the bug is in the integration, not Portainer or this card. No fix as of this writing. If images you expect to be removed remain after pruning, this is why.
 
-Portainer also exposes `button.*_prune_volumes` and `button.*_prune_networks` entities — add them as `prune_volumes` / `prune_networks` in `docker_overview` for the same confirm-before-running flow. Unlike `prune_images`, they don't share the WUD tile — each renders in its own standalone tile:
+Portainer also exposes `button.*_prune_volumes` and `button.*_prune_networks` entities — add them as `prune_volumes` / `prune_networks` in `docker_overview` for the same confirm-before-running flow. Each renders in its own standalone tile; configuring any of them alongside `prune_images` also moves `prune_images` out of the shared WUD tile (see above), so all maintenance actions stay consistent with each other:
 ```yaml
 docker_overview:
   prune_images: button.portainer_local_prune_images
@@ -472,6 +472,7 @@ shell_command:
 | Entities missing | Check that the Portainer integration is connected and entity IDs match your YAML — confirm the *exact* IDs in Developer Tools → States, especially on non-English Home Assistant instances (see [How it works](#how-it-works)) |
 | Colors not updating | Reload the dashboard after changing color values; check for typos in CSS variables or hex codes |
 | Toggle not working | Ensure `control_entity` uses a supported domain (`switch`, `input_boolean`, etc.) — `binary_sensor` is read-only |
+| Container stopped/started but the card doesn't update right away | The card re-renders as soon as `status_entity`'s state actually changes in `hass.states` — if it lags, the delay is on Portainer's side (it polls the Docker daemon rather than reacting instantly), not the card. Check **Developer Tools → States** for the same entity: if it's slow to update there too, this is expected Portainer integration behavior, not a card bug |
 | Paused state not detected | Use a `sensor` (not `binary_sensor`) for `status_entity`; verify the entity reports `paused` as its state in Developer Tools → States |
 | Pause button missing | The button only appears when the container is running or paused — it is hidden for stopped containers |
 | Pause / Resume not working | Check that `pause_entity` and `resume_entity` point to valid `button.*` entities and that they exist in Developer Tools |
@@ -499,10 +500,10 @@ shell_command:
 
 **Generalized the Prune confirm pattern to Volumes and Networks** — [#17](https://github.com/johro897/docker-card-extended/issues/17)
 - New `prune_volumes` / `prune_networks` `docker_overview` options, reusing the same arm → inline confirm → pending flow as `prune_images` (#7)
-- Each renders in its own standalone tile; `prune_images` keeps sharing a tile with `wud_scan` exactly as before
+- Each renders in its own standalone tile. `prune_images` keeps sharing a tile with `wud_scan` when it's the *only* maintenance action configured, same as before — but once `prune_volumes`/`prune_networks` are also set, `prune_images` moves out of the shared tile too, so every maintenance action is consistent with the others
 
 **Aggregate updates overview tile** — [#16](https://github.com/johro897/docker-card-extended/issues/16)
-- New opt-in `updates_summary: true` card option adds an "N updates available" tile to the overview grid, counting containers whose `update_entity` currently reports an available update
+- New opt-in `docker_overview.updates_summary: true` option adds an "N updates available" tile to the overview grid, counting containers whose `update_entity` currently reports an available update
 - Off by default; the tile is also hidden automatically when the count is `0`, so it never adds noise when everything is up to date
 
 **Fix: language auto-detection was silently broken** — [#22](https://github.com/johro897/docker-card-extended/issues/22)

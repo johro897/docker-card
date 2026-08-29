@@ -554,7 +554,6 @@
         running_color: "var(--state-active-color, #2e8f57)",
         not_running_color: "var(--state-error-color, #c22040)",
         paused_color: "var(--state-warning-color, #f4b942)",
-        updates_summary: false,        // opt-in aggregate "N updates available" overview tile
         // ── Graph options (opt-in) ──
         graphs: false,                 // enable CPU/Memory sparklines (card-level default)
         graph_hours: 2,                // history window in hours
@@ -1220,10 +1219,12 @@
           aria: this._t("overview.wud_last_poll_aria"),
         });
       }
-      // Aggregate "N updates available" tile — opt-in via updates_summary: true,
-      // counts containers whose update_entity currently reports an available
-      // update (same detection _getUpdateInfo already does per row).
-      if (this.config.updates_summary) {
+      // Aggregate "N updates available" tile — opt-in via docker_overview.updates_summary: true
+      // (lives here, not as a card-level option, since it's an overview-grid
+      // tile like every other docker_overview entry). Counts containers whose
+      // update_entity currently reports an available update (same detection
+      // _getUpdateInfo already does per row).
+      if (oc.updates_summary) {
         const updateCount = (this.config.containers || [])
           .filter((c) => {
             const info = this._getUpdateInfo(c);
@@ -1235,7 +1236,12 @@
       }
       const maintActions = this._maintenanceActions();
       const imagesAction = maintActions.find((a) => a.id === "images");
-      const extraMaintActions = maintActions.filter((a) => a.id !== "images");
+      // Prune Images only shares a tile with WUD scan when it's the ONLY
+      // configured maintenance action — with Volumes/Networks (#17) also
+      // configured, sharing would be inconsistent (Images gets a shortcut
+      // the others don't), so all maintenance actions render standalone
+      // instead and WUD scan gets its own tile too.
+      const shareImagesWithWud = Boolean(oc.wud_scan && imagesAction && maintActions.length === 1);
       if (!items.length && !oc.wud_scan && !maintActions.length) return "";
       let html = `<div class="dc-overview">`;
       html += items.map((item) => `
@@ -1249,11 +1255,7 @@
               : `<div class="dc-ov-value${item.cls ? " " + item.cls : ""}">${this._esc(item.value)}</div>`}
           </div>
         </div>`).join("");
-      // WUD scan + Prune images — share one tile when both are configured,
-      // otherwise each renders alone exactly as before. Prune Volumes/Networks
-      // (#17) aren't part of that shared tile — each gets its own standalone
-      // tile below, same as Prune Images would on its own.
-      if (oc.wud_scan && imagesAction) {
+      if (shareImagesWithWud) {
         html += `
           <div class="dc-ov-item dc-maint">
             <div class="dc-maint-row">
@@ -1264,10 +1266,9 @@
           </div>`;
       } else if (oc.wud_scan) {
         html += `<div class="dc-ov-item wud-scan${this._wudScanPending ? " pending" : ""}">${this._renderWudScanHalf(oc.wud_scan)}</div>`;
-      } else if (imagesAction) {
-        html += `<div class="dc-ov-item">${this._renderMaintenanceHalf(imagesAction)}</div>`;
       }
-      html += extraMaintActions.map((action) => `<div class="dc-ov-item">${this._renderMaintenanceHalf(action)}</div>`).join("");
+      const standaloneMaintActions = shareImagesWithWud ? [] : maintActions;
+      html += standaloneMaintActions.map((action) => `<div class="dc-ov-item">${this._renderMaintenanceHalf(action)}</div>`).join("");
       html += `</div>`;
       return html;
     }

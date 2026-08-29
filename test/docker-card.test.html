@@ -384,7 +384,7 @@
   test('updates_summary: true counts containers with a pending update, ignores ones without', () => {
     const card = freshCard();
     card.setConfig({
-      updates_summary: true,
+      docker_overview: { updates_summary: true },
       containers: [
         baseContainer({ update_entity: 'update.plex' }),
         baseContainer({ name: 'sonarr', update_entity: 'update.sonarr' }),
@@ -403,7 +403,7 @@
 
   test('updates_summary: true but zero pending updates hides the tile', () => {
     const card = freshCard();
-    card.setConfig({ updates_summary: true, containers: [baseContainer({ update_entity: 'update.plex' })] });
+    card.setConfig({ docker_overview: { updates_summary: true }, containers: [baseContainer({ update_entity: 'update.plex' })] });
     card.hass = fakeHass({ states: { 'update.plex': { state: 'No' } } }).hass;
     const label = Array.from(card.querySelectorAll('.dc-ov-label')).find((el) => el.textContent === 'Updates available');
     assertTrue(!label, 'expected no tile when the count is 0');
@@ -524,7 +524,17 @@
     assertTrue(!!card.querySelector('[data-prune-networks-arm]'), 'networks should still be idle');
   });
 
-  test('Maintenance: Prune Images still shares one tile with WUD scan when both are configured; Volumes/Networks get their own tiles', () => {
+  test('Maintenance: Prune Images shares a tile with WUD scan when it is the ONLY maintenance action configured', () => {
+    const card = freshCard();
+    card.setConfig({
+      containers: [],
+      docker_overview: { wud_scan: 'button.wud_scan_all', prune_images: 'button.docker_prune_images' },
+    });
+    card.hass = fakeHass({}).hass;
+    assertEqual(card.querySelectorAll('.dc-maint').length, 1, 'WUD + the sole Prune action should share exactly one .dc-maint tile');
+  });
+
+  test('Maintenance: with Volumes also configured, Prune Images no longer shares a tile with WUD scan — all three render standalone for consistency', () => {
     const card = freshCard();
     card.setConfig({
       containers: [],
@@ -535,8 +545,10 @@
       },
     });
     card.hass = fakeHass({}).hass;
-    assertEqual(card.querySelectorAll('.dc-maint').length, 1, 'WUD + Prune Images should still share exactly one .dc-maint tile');
-    assertTrue(!!card.querySelector('[data-prune-volumes-arm]'), 'Prune Volumes should render in its own standalone tile');
+    assertEqual(card.querySelectorAll('.dc-maint').length, 0, 'no shared tile once more than one maintenance action is configured');
+    assertTrue(!!card.querySelector('[data-wud-scan]'), 'WUD scan should still render, on its own');
+    assertTrue(!!card.querySelector('[data-prune-arm]'), 'Prune Images should render standalone');
+    assertTrue(!!card.querySelector('[data-prune-volumes-arm]'), 'Prune Volumes should render standalone');
   });
 
   test('Prune: Cancel returns to the idle "Prune now" state without calling anything', () => {
