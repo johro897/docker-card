@@ -13,6 +13,7 @@ An extended version of Docker Card, inspired by [vineetchoudhary/lovelace-docker
 - [Pause / Resume](#pause--resume)
 - [Recreate container](#recreate-container)
 - [Resource graphs (CPU / Memory)](#resource-graphs-cpu--memory)
+- [Network I/O graphs](#network-io-graphs)
 - [WUD integration](#wud-integration)
 - [Full example configuration](#full-example-configuration)
 - [Styling](#styling)
@@ -36,6 +37,7 @@ An extended version of Docker Card, inspired by [vineetchoudhary/lovelace-docker
 - **WUD overview tiles** — shows last scan time and a one-click Force Scan button directly in the card overview
 - **Prune unused images** — one-click prune of unused Docker images via Portainer's own button entity, with an inline confirmation step before it runs
 - **Disk usage overview tiles** — container, image, and volume disk usage from Portainer, shown in whatever unit the sensor reports
+- **Multi-language UI** — auto-translates to your Home Assistant language: English (default), Swedish, German, French
 - Theme-aware styling with configurable running / paused / not-running accent colors
 - Works out-of-the-box with entities from the Portainer integration; also supports any toggle-friendly domain (`switch`, `input_boolean`, `light`, etc.)
 - Optional tap/hold actions per container row for quick navigation, service calls, or external links
@@ -108,6 +110,8 @@ This walks through the minimum needed to see one real container on the card. It 
 | `graph_refresh` | No | `300` | Minimum seconds between history refetches per entity — overridable per container (floor: `30`, lower values are raised automatically) |
 | `graph_cpu_color` | No | `var(--primary-color)` | Line/area color for CPU graphs — overridable per container |
 | `graph_memory_color` | No | `var(--accent-color)` | Line/area color for Memory graphs — overridable per container |
+| `graph_network_rx_color` | No | `var(--info-color)` | Line color for the Network RX (download) line — overridable per container |
+| `graph_network_tx_color` | No | `var(--warning-color)` | Line color for the Network TX (upload) line — overridable per container |
 | `docker_overview` | No | — | High-level Docker host stats |
 | `containers` | **Yes** | — | Array of container definitions |
 
@@ -128,7 +132,10 @@ This walks through the minimum needed to see one real container on the card. It 
 | `volume_disk_usage` | Portainer sensor — total disk space used by volumes. See note below if it stays `unknown`/`unavailable` |
 | `wud_last_poll` | WUD Monitor sensor — shows timestamp of last WUD scan |
 | `wud_scan` | WUD Monitor button — click to trigger an immediate scan of all containers |
-| `prune_images` | Portainer's "Prune unused images" button — removes unused Docker images from the endpoint. Asks for confirmation before running. Shares one tile with `wud_scan` when both are set |
+| `prune_images` | Portainer's "Prune unused images" button — removes unused Docker images from the endpoint. Asks for confirmation before running. Shares one tile with `wud_scan` *only* when it's the sole maintenance action configured (no `prune_volumes`/`prune_networks`) — with more than one maintenance action set, all of them (including this one) render as their own standalone tile, for consistency |
+| `prune_volumes` | Portainer's "Prune unused volumes" button — same confirm-before-running flow as `prune_images`, in its own tile |
+| `prune_networks` | Portainer's "Prune unused networks" button — same confirm-before-running flow as `prune_images`, in its own tile |
+| `updates_summary` | Add an aggregate "N updates available" tile, counting containers with a pending WUD update. Hidden when the count is `0` |
 
 > [!NOTE]
 > **If `container_disk_usage` / `image_disk_usage` / `volume_disk_usage` stay stuck on `unknown` — or show as `unavailable` entirely — this is a known Portainer/Home Assistant limitation, not a card bug.** These sensors are populated via Docker's `docker system df` command, which is [documented to be slow on overlay2 filesystems](https://github.com/home-assistant/core/issues/165617) — common on Linux and NAS Docker hosts. If it exceeds the integration's timeout, those specific sensors either stay `unknown` or are marked `unavailable` outright (both outcomes are reported against the same upstream issue), while the rest of the integration keeps working normally. Home Assistant closed the upstream issue as "not planned," so there's currently no fix on their side either. You can confirm this is the cause by running `time docker system df` on your Docker host — if it takes more than a few seconds, that's why.
@@ -154,6 +161,10 @@ This walks through the minimum needed to see one real container on the card. It 
 | `graph_refresh` | No | Per-container minimum seconds between history refetches |
 | `graph_cpu_color` | No | Per-container override for CPU graph color |
 | `graph_memory_color` | No | Per-container override for Memory graph color |
+| `network_rx_entity` | No | Sensor for network download (RX) throughput. Configure with `network_tx_entity` for a two-line graph, or on its own for a single-line one — see [Network I/O graphs](#network-io-graphs) |
+| `network_tx_entity` | No | Sensor for network upload (TX) throughput — see [Network I/O graphs](#network-io-graphs) |
+| `graph_network_rx_color` | No | Per-container override for the Network RX line color |
+| `graph_network_tx_color` | No | Per-container override for the Network TX line color |
 | `image_version_entity` | No | Sensor showing the current image tag/version |
 | `health_entity` | No | Sensor for container health (`healthy`, `unhealthy`, `starting`) |
 | `update_entity` | No | WUD Monitor sensor for update tracking — requires WUD + WUD Monitor integration |
@@ -261,6 +272,25 @@ Times and dates follow your Home Assistant language setting.
 > [!NOTE]
 > The `cpu_entity` / `memory_entity` sensors must be included in the [recorder](https://www.home-assistant.io/integrations/recorder/) — excluded entities have no history and the graph shows *no history* (the current value is still displayed). The axis reflects the data that actually exists, so a graph can be shorter than the window you asked for if the recorder has nothing older. With `graphs` omitted or `false`, the card behaves exactly as before.
 
+## Network I/O graphs
+Unlike CPU/Memory, network throughput has a direction — download (RX) and upload (TX) — so which line(s) you get is controlled purely by which sensors you configure:
+```yaml
+graphs: true
+containers:
+  - name: plex
+    status_entity: sensor.plex_status
+    control_entity: switch.plex
+    network_rx_entity: sensor.plex_network_rx    # optional on its own
+    network_tx_entity: sensor.plex_network_tx    # optional on its own
+```
+- Only `network_rx_entity` (or only `network_tx_entity`) set → a single-line graph, same look as CPU/Memory
+- Both set → one graph with two lines sharing a y-scale, labeled `↓ <value>` / `↑ <value>` in their own colors — no area fill, so the two lines stay readable where they cross
+
+**Colors** default to `var(--info-color)` for RX and `var(--warning-color)` for TX. Override globally with `graph_network_rx_color` / `graph_network_tx_color`, or per container with the same keys.
+
+> [!NOTE]
+> Same recorder requirement and `graphs: true` gate as CPU/Memory graphs above — network sensors aren't shown at all outside graph mode.
+
 ## WUD integration
 To use WUD update tracking and scan controls you need:
 1. A running [What's Up Docker](https://github.com/getwud/wud) instance (tested with WUD 8.2+)
@@ -305,7 +335,7 @@ docker_overview:
   wud_scan: button.wud_wud_force_scan_all
   prune_images: button.portainer_local_prune_images
 ```
-When both `wud_scan` and `prune_images` are set they share one overview tile, split by a divider — the two maintenance actions live together instead of being scattered among the stat tiles. With only one of the two configured, it renders alone exactly as `wud_scan` always has.
+When both `wud_scan` and `prune_images` are set — and `prune_images` is the *only* maintenance action configured — they share one overview tile, split by a divider. Add `prune_volumes` and/or `prune_networks` (see below) and the sharing stops: every maintenance action, `prune_images` included, then gets its own standalone tile, so you don't end up with one action singled out into a shared tile while the others sit apart.
 
 Clicking **Prune now** doesn't fire immediately — it swaps to an inline "Remove unused images?" confirmation with **Confirm** / **Cancel**, since this is a destructive action. Confirming calls `button.press` on the configured entity and shows "Pruning…" for 3 seconds.
 
@@ -313,6 +343,17 @@ Pairs well with `image_disk_usage` in `docker_overview` — watch the number dro
 
 > [!WARNING]
 > **Pruning may silently leave tagged-but-unused images behind — this is a known Portainer integration bug, not a card bug.** [home-assistant/core#179542](https://github.com/home-assistant/core/issues/179542) confirms the integration's `prune_images` action doesn't correctly pass its `dangling: false` filter to Portainer's API — calling Portainer's own API directly with the same parameters prunes correctly, so the bug is in the integration, not Portainer or this card. No fix as of this writing. If images you expect to be removed remain after pruning, this is why.
+
+Portainer also exposes `button.*_prune_volumes` and `button.*_prune_networks` entities — add them as `prune_volumes` / `prune_networks` in `docker_overview` for the same confirm-before-running flow. Each renders in its own standalone tile; configuring any of them alongside `prune_images` also moves `prune_images` out of the shared WUD tile (see above), so all maintenance actions stay consistent with each other:
+```yaml
+docker_overview:
+  prune_images: button.portainer_local_prune_images
+  prune_volumes: button.portainer_local_prune_volumes
+  prune_networks: button.portainer_local_prune_networks
+```
+
+> [!WARNING]
+> **`prune_volumes` may fail outright with "An error occurred while trying to connect to the Portainer instance" — a separate, unrelated suspected Portainer integration issue from the tagged-images bug above, not confirmed as a card bug.** Where the images bug above prunes *silently incompletely*, this one is a hard failure on every attempt. The card's Confirm button calls the exact same `button.press` service call as `prune_images`/`wud_scan`, both of which work reliably, and Portainer's own data coordinator keeps polling successfully in the same log window — so this isn't a real connectivity problem. Comparing the underlying [`pyportainer`](https://github.com/erwindouna/pyportainer) library's `prune_volumes()` against the already-working `images_prune()` shows one concrete difference: `prune_volumes` sends a redundant `endpointId` query parameter (the endpoint ID is already in the URL path) alongside `all`, which `images_prune` doesn't do. That's a plausible cause, but unconfirmed — Home Assistant's generic error message swallows the actual underlying exception. If you hit this, the button press itself and this card are not the problem.
 
 ## Full example configuration
 Everything above, combined into one card:
@@ -434,6 +475,7 @@ shell_command:
 | Entities missing | Check that the Portainer integration is connected and entity IDs match your YAML — confirm the *exact* IDs in Developer Tools → States, especially on non-English Home Assistant instances (see [How it works](#how-it-works)) |
 | Colors not updating | Reload the dashboard after changing color values; check for typos in CSS variables or hex codes |
 | Toggle not working | Ensure `control_entity` uses a supported domain (`switch`, `input_boolean`, etc.) — `binary_sensor` is read-only |
+| Container stopped/started but the card doesn't update right away | The card re-renders as soon as `status_entity`'s state actually changes in `hass.states` — if it lags, the delay is on Portainer's side (it polls the Docker daemon rather than reacting instantly), not the card. Check **Developer Tools → States** for the same entity: if it's slow to update there too, this is expected Portainer integration behavior, not a card bug |
 | Paused state not detected | Use a `sensor` (not `binary_sensor`) for `status_entity`; verify the entity reports `paused` as its state in Developer Tools → States |
 | Pause button missing | The button only appears when the container is running or paused — it is hidden for stopped containers |
 | Pause / Resume not working | Check that `pause_entity` and `resume_entity` point to valid `button.*` entities and that they exist in Developer Tools |
@@ -447,11 +489,31 @@ shell_command:
 | Scan button not working | Verify the WUD Monitor integration is installed and `wud_scan` points to the correct `button.*` entity |
 | Prune button not working | Verify `prune_images` points to a valid Portainer `button.*_prune_images` entity and that the Portainer integration is connected |
 | Pruning runs but tagged images stay behind | Known Portainer integration bug, not a card bug — see the warning in [Prune unused images](#prune-unused-images) ([home-assistant/core#179542](https://github.com/home-assistant/core/issues/179542)) |
+| Prune Volumes fails with "error occurred while trying to connect to the Portainer instance" | A separate, unrelated suspected Portainer integration issue from the tagged-images bug above (this one is a hard failure, not silently incomplete pruning) — not a confirmed card bug. See the second warning under [Prune unused images](#prune-unused-images) |
 | Recreate button missing | Add `recreate_entity` pointing to the container's Portainer recreate `button.*` entity |
 | Recreate doesn't seem to update the container | Expected if the image tag is pinned (e.g. `:1.4.2`) — see the note in [Recreate container](#recreate-container). Only mutable tags like `:latest` actually change |
 | Disk usage tiles stuck on "—" / entity shows `unknown` or `unavailable` | Known upstream Portainer/HA limitation, not a card bug — see the note under [docker_overview options](#docker_overview-options). `docker system df` is slow on overlay2 filesystems and can time out ([tracked upstream](https://github.com/home-assistant/core/issues/165617), closed as not planned) |
 
 ## Changelog
+
+### 3.9.0
+**Network I/O graphs** — [#19](https://github.com/johro897/docker-card-extended/issues/19)
+- New `network_rx_entity` / `network_tx_entity` per-container options — configure one for a single-line graph, or both for a two-line RX/TX graph sharing a y-scale
+- New `graph_network_rx_color` / `graph_network_tx_color` options (card-level and per-container), defaulting to `var(--info-color)` / `var(--warning-color)`
+- Works standalone — `graphs: true` no longer requires `cpu_entity`/`memory_entity` to also be configured
+
+**Generalized the Prune confirm pattern to Volumes and Networks** — [#17](https://github.com/johro897/docker-card-extended/issues/17)
+- New `prune_volumes` / `prune_networks` `docker_overview` options, reusing the same arm → inline confirm → pending flow as `prune_images` (#7)
+- Each renders in its own standalone tile. `prune_images` keeps sharing a tile with `wud_scan` when it's the *only* maintenance action configured, same as before — but once `prune_volumes`/`prune_networks` are also set, `prune_images` moves out of the shared tile too, so every maintenance action is consistent with the others
+
+**Aggregate updates overview tile** — [#16](https://github.com/johro897/docker-card-extended/issues/16)
+- New opt-in `docker_overview.updates_summary: true` option adds an "N updates available" tile to the overview grid, counting containers whose `update_entity` currently reports an available update
+- Off by default; the tile is also hidden automatically when the count is `0`, so it never adds noise when everything is up to date
+
+**Fix: language auto-detection was silently broken** — [#22](https://github.com/johro897/docker-card-extended/issues/22)
+- The card had a full translation mechanism, but it was built to fetch separate `translations/<lang>.json` files at runtime — HACS's plugin category only ever distributes the single file named in `hacs.json`, so those files never reached a real install and the card has only ever rendered English, regardless of your HA instance's language
+- Fixed by bundling English, Swedish, German, and French directly in the card file, matching the pattern already used by this project's other five cards
+- Also fixed the language-detection source: previously read `hass.selectedLanguage` (not a real HA frontend property) — now reads `hass.locale.language`/`hass.language`, matching every other translated card here
 
 ### 3.7
 **Security hardening** — [#13](https://github.com/johro897/docker-card-extended/issues/13)

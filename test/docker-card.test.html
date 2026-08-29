@@ -1,0 +1,609 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>docker-card-extended tests</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #111; color: #ddd; padding: 24px; max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 18px; }
+  .summary { font-size: 15px; font-weight: 600; margin: 16px 0; padding: 10px 14px; border-radius: 8px; }
+  .summary.pass { background: #103a1f; color: #7ee0a0; }
+  .summary.fail { background: #3a1010; color: #f08585; }
+  ul { list-style: none; padding: 0; }
+  li { padding: 6px 10px; border-radius: 6px; margin-bottom: 3px; font-size: 13px; font-family: ui-monospace, monospace; }
+  li.pass { background: #16281c; color: #8fd6a8; }
+  li.fail { background: #2a1414; color: #f2a3a3; }
+  li .err { display: block; color: #e0b0b0; margin-top: 4px; white-space: pre-wrap; }
+  #card-host { position: absolute; left: -9999px; top: -9999px; }
+</style>
+</head>
+<body>
+<h1>docker-card-extended — test suite</h1>
+<p style="color:#999; font-size:13px;">Open this file directly in a browser, or serve the repo root with any static file server and open <code>/test/docker-card.test.html</code>. Loads the real card file from <code>../docker-card.js</code> — see <code>test/README.md</code>.</p>
+<div id="summary"></div>
+<ul id="results"></ul>
+
+<div id="card-host"></div>
+
+<script src="../docker-card.js"></script>
+<script>
+(async () => {
+  // ---------------------------------------------------------------------
+  // Tiny zero-dependency test framework (same shape as the other cards' suites)
+  // ---------------------------------------------------------------------
+  const cases = [];
+  function test(name, fn) { cases.push({ name, fn }); }
+
+  function assertEqual(actual, expected, msg) {
+    if (actual !== expected) {
+      throw new Error(`${msg || 'assertEqual failed'}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+    }
+  }
+  function assertTrue(cond, msg) {
+    if (!cond) throw new Error(msg || 'assertTrue failed');
+  }
+  function assertDeepEqual(actual, expected, msg) {
+    const a = JSON.stringify(actual);
+    const e = JSON.stringify(expected);
+    if (a !== e) throw new Error(`${msg || 'assertDeepEqual failed'}: expected ${e}, got ${a}`);
+  }
+
+  // ---------------------------------------------------------------------
+  // Helpers. The card renders into light DOM (this.innerHTML), not a Shadow
+  // DOM, so tests query the card element directly.
+  // ---------------------------------------------------------------------
+  const host = document.getElementById('card-host');
+
+  function freshCard() {
+    const el = document.createElement('docker-card');
+    host.appendChild(el);
+    return el;
+  }
+
+  function fakeHass({ states = {}, language = 'en', callServiceImpl, callApiImpl } = {}) {
+    const calls = [];
+    const hass = {
+      states,
+      language,
+      locale: { language },
+      callService: (domain, service, data) => {
+        calls.push({ domain, service, data });
+        return callServiceImpl ? callServiceImpl(domain, service, data) : Promise.resolve();
+      },
+      callApi: (method, url) => callApiImpl ? callApiImpl(method, url) : Promise.resolve([[]]),
+    };
+    return { hass, calls };
+  }
+
+  /** Builds a fake history/period response: a flat point every minute for `count` minutes, ending at value `end`. */
+  function fakeHistory(count, end) {
+    const now = Date.now();
+    const points = [];
+    for (let i = count - 1; i >= 0; i--) {
+      points.push({ last_changed: new Date(now - i * 60000).toISOString(), state: String(end) });
+    }
+    return [points];
+  }
+
+  function baseContainer(overrides = {}) {
+    return {
+      name: 'plex',
+      status_entity: 'sensor.plex_status',
+      control_entity: 'switch.plex',
+      restart_entity: 'button.plex_restart',
+      pause_entity: 'button.plex_pause',
+      resume_entity: 'button.plex_resume',
+      recreate_entity: 'button.plex_recreate',
+      ...overrides,
+    };
+  }
+
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  // ---------------------------------------------------------------------
+  // Config normalization
+  // ---------------------------------------------------------------------
+  test('_normalizeContainers: a dict keyed by id (not a list) is flattened to its values', () => {
+    const card = freshCard();
+    card.setConfig({ containers: { plex: baseContainer(), sonarr: baseContainer({ name: 'sonarr' }) } });
+    assertEqual(card.config.containers.length, 2);
+    assertDeepEqual(card.config.containers.map((c) => c.name).sort(), ['plex', 'sonarr']);
+  });
+
+  test('_normalizeContainers: a single flat container object (all-string values) yields no containers, not a crash', () => {
+    // Documents real behavior: _normalizeContainers treats a bare object as a
+    // possible id-keyed dict via Object.values() — a flat container object's
+    // own field values are strings, not container objects, so none get added.
+    // `containers:` must be a list (or an id-keyed dict of objects), never a
+    // single container object directly.
+    const card = freshCard();
+    card.setConfig({ containers: baseContainer() });
+    assertEqual(card.config.containers.length, 0);
+  });
+
+  test('setConfig: legacy singular "container" key is accepted the same as "containers"', () => {
+    const card = freshCard();
+    card.setConfig({ container: [baseContainer({ name: 'sonarr' })] });
+    assertEqual(card.config.containers.length, 1);
+    assertEqual(card.config.containers[0].name, 'sonarr');
+  });
+
+  test('setConfig: card-level stopped_color aliases to not_running_color', () => {
+    const card = freshCard();
+    card.setConfig({ containers: [], stopped_color: '#ff0000' });
+    assertEqual(card.config.not_running_color, '#ff0000');
+  });
+
+  test('_normalizeContainers: per-container stopped_color aliases to not_running_color', () => {
+    const card = freshCard();
+    card.setConfig({ containers: [baseContainer({ stopped_color: '#00ff00', not_running_color: undefined })] });
+    assertEqual(card.config.containers[0].not_running_color, '#00ff00');
+  });
+
+  // ---------------------------------------------------------------------
+  // Status computation
+  // ---------------------------------------------------------------------
+  test('_containerStatus: recognizes running/stopped/paused states case-insensitively', () => {
+    const card = freshCard();
+    card.setConfig({ containers: [baseContainer()] });
+    card.hass = fakeHass({ states: { 'sensor.plex_status': { state: 'RUNNING' } } }).hass;
+    const si = card._containerStatus(card.config.containers[0]);
+    assertEqual(si.isRunning, true);
+    assertEqual(si.cssClass, 'running');
+  });
+
+  test('_containerStatus: unknown/unmapped state falls back to the "unknown" class', () => {
+    const card = freshCard();
+    card.setConfig({ containers: [baseContainer()] });
+    card.hass = fakeHass({ states: { 'sensor.plex_status': { state: 'weird_custom_state' } } }).hass;
+    const si = card._containerStatus(card.config.containers[0]);
+    assertEqual(si.isRunning, false);
+    assertEqual(si.isStopped, false);
+    assertEqual(si.cssClass, 'unknown');
+  });
+
+  test('_prettyStatus localizes to Swedish', () => {
+    const card = freshCard();
+    card.setConfig({ containers: [] });
+    card.hass = fakeHass({ language: 'sv' }).hass;
+    assertEqual(card._prettyStatus('running'), 'Igång');
+    assertEqual(card._prettyStatus('paused'), 'Pausad');
+  });
+
+  test('_computeOverallStatus: no docker_overview.status entity configured -> unknown/idle', () => {
+    const card = freshCard();
+    card.setConfig({ containers: [] });
+    card.hass = fakeHass({}).hass;
+    const status = card._computeOverallStatus();
+    assertEqual(status.cssClass, 'idle');
+    assertEqual(status.label, 'Unknown');
+  });
+
+  // ---------------------------------------------------------------------
+  // Formatting helpers
+  // ---------------------------------------------------------------------
+  test('_fmtResourceValue: defaults to % when the entity declares no unit_of_measurement', () => {
+    const card = freshCard();
+    card.setConfig({ containers: [] });
+    assertEqual(card._fmtResourceValue({ state: '12.345' }), '12.3%');
+  });
+
+  test('_fmtResourceValue: uses the entity\'s own unit_of_measurement (e.g. memory in MB)', () => {
+    const card = freshCard();
+    card.setConfig({ containers: [] });
+    assertEqual(card._fmtResourceValue({ state: '512', attributes: { unit_of_measurement: 'MB' } }), '512.0 MB');
+  });
+
+  test('_fmtResourceValue: unknown/unavailable state returns null (no fallback text)', () => {
+    const card = freshCard();
+    card.setConfig({ containers: [] });
+    assertEqual(card._fmtResourceValue({ state: 'unavailable' }), null);
+  });
+
+  test('_fmtStateWithUnit: appends unit_of_measurement, no % fallback for blank unit', () => {
+    const card = freshCard();
+    card.setConfig({ containers: [] });
+    assertEqual(card._fmtStateWithUnit({ state: '4.2', attributes: { unit_of_measurement: 'GB' } }), '4.2 GB');
+    assertEqual(card._fmtStateWithUnit({ state: '4.2', attributes: {} }), '4.2', 'no unit declared -> no suffix, and definitely not %');
+  });
+
+  test('_isBlank treats "—", unknown/unavailable, and whitespace-only as blank', () => {
+    const card = freshCard();
+    card.setConfig({ containers: [] });
+    assertTrue(card._isBlank('—'));
+    assertTrue(card._isBlank('unknown'));
+    assertTrue(card._isBlank('unavailable'));
+    assertTrue(card._isBlank('  '));
+    assertTrue(!card._isBlank('4.2 GB'));
+  });
+
+  test('_esc escapes HTML special characters', () => {
+    const card = freshCard();
+    card.setConfig({ containers: [] });
+    assertEqual(card._esc(`<img src=x onerror="a&b">`), '&lt;img src=x onerror=&quot;a&amp;b&quot;&gt;');
+  });
+
+  test('_safeHttpUrl: blocks javascript: URLs, allows https', () => {
+    const card = freshCard();
+    card.setConfig({ containers: [] });
+    assertEqual(card._safeHttpUrl('javascript:alert(1)'), '');
+    assertEqual(card._safeHttpUrl('https://example.com/notes'), 'https://example.com/notes');
+  });
+
+  // ---------------------------------------------------------------------
+  // Dirty-check (_isDirty)
+  // ---------------------------------------------------------------------
+  test('_isDirty: false when an unwatched entity changes', () => {
+    const card = freshCard();
+    card.setConfig({ containers: [baseContainer()] });
+    const s1 = { 'sensor.plex_status': { state: 'running' } };
+    const prev = { states: s1, language: 'en', locale: { language: 'en' } };
+    const next = { states: { ...s1, 'sensor.unrelated': { state: 'x' } }, language: 'en', locale: prev.locale };
+    assertEqual(card._isDirty(prev, next), false);
+  });
+
+  test('_isDirty: true when a watched container entity\'s state object changes', () => {
+    const card = freshCard();
+    card.setConfig({ containers: [baseContainer()] });
+    const prev = { states: { 'sensor.plex_status': { state: 'running' } }, language: 'en', locale: { language: 'en' } };
+    const next = { states: { 'sensor.plex_status': { state: 'stopped' } }, language: 'en', locale: prev.locale };
+    assertEqual(card._isDirty(prev, next), true);
+  });
+
+  test('_isDirty: true when the language changes, even with identical states', () => {
+    const card = freshCard();
+    card.setConfig({ containers: [] });
+    const states = {};
+    const prev = { states, language: 'en', locale: { language: 'en' } };
+    const next = { states, language: 'sv', locale: { language: 'sv' } };
+    assertEqual(card._isDirty(prev, next), true);
+  });
+
+  // ---------------------------------------------------------------------
+  // Translations
+  // ---------------------------------------------------------------------
+  test('_t: Swedish translation with {placeholder} substitution', () => {
+    const card = freshCard();
+    card.setConfig({ containers: [] });
+    card.hass = fakeHass({ language: 'sv' }).hass;
+    assertEqual(card._t('notifications.starting', { name: 'plex' }), 'Startar plex…');
+  });
+
+  test('_lang: unsupported language falls back to English', () => {
+    const card = freshCard();
+    card.setConfig({ containers: [] });
+    card.hass = fakeHass({ language: 'pt' }).hass;
+    assertEqual(card._lang(), 'en');
+  });
+
+  // ---------------------------------------------------------------------
+  // Service resolution
+  // ---------------------------------------------------------------------
+  test('_resolveToggleService: a switch control_entity resolves to turn_on/turn_off', () => {
+    const card = freshCard();
+    card.setConfig({ containers: [] });
+    const c = baseContainer();
+    assertDeepEqual(card._resolveToggleService(c, true), { domain: 'switch', service: 'turn_on', data: { entity_id: 'switch.plex' } });
+    assertDeepEqual(card._resolveToggleService(c, false), { domain: 'switch', service: 'turn_off', data: { entity_id: 'switch.plex' } });
+  });
+
+  test('_getRestartService: a button restart_entity resolves to button.press', () => {
+    const card = freshCard();
+    card.setConfig({ containers: [] });
+    assertDeepEqual(card._getRestartService(baseContainer()), { domain: 'button', service: 'press', data: { entity_id: 'button.plex_restart' } });
+  });
+
+  test('_getPauseService: resolves pause_entity and resume_entity independently', () => {
+    const card = freshCard();
+    card.setConfig({ containers: [] });
+    const c = baseContainer();
+    assertDeepEqual(card._getPauseService(c, false), { domain: 'button', service: 'press', data: { entity_id: 'button.plex_pause' } });
+    assertDeepEqual(card._getPauseService(c, true), { domain: 'button', service: 'press', data: { entity_id: 'button.plex_resume' } });
+  });
+
+  test('_getPauseService: no resume_entity configured -> undefined, not a crash', () => {
+    const card = freshCard();
+    card.setConfig({ containers: [] });
+    assertEqual(card._getPauseService(baseContainer({ resume_entity: undefined }), true), undefined);
+  });
+
+  test('_getRecreateService: a button recreate_entity resolves to button.press', () => {
+    const card = freshCard();
+    card.setConfig({ containers: [] });
+    assertDeepEqual(card._getRecreateService(baseContainer()), { domain: 'button', service: 'press', data: { entity_id: 'button.plex_recreate' } });
+  });
+
+  // ---------------------------------------------------------------------
+  // Toggle flow
+  // ---------------------------------------------------------------------
+  test('_handleToggle: missing service notifies and reverts the switch instead of calling anything', async () => {
+    const card = freshCard();
+    card.setConfig({ containers: [baseContainer({ control_entity: undefined })] });
+    const { hass, calls } = fakeHass({ states: { 'sensor.plex_status': { state: 'stopped' } } });
+    card.hass = hass;
+    let notified = null;
+    card.addEventListener('hass-notification', (e) => { notified = e.detail.message; });
+    const fakeSwitch = { checked: true, disabled: false };
+    await card._handleToggle(card.config.containers[0], true, fakeSwitch);
+    assertEqual(calls.length, 0);
+    assertEqual(fakeSwitch.checked, false, 'switch should revert to reflect that start did not actually happen');
+    assertTrue(!!notified, 'expected a notification about the missing service');
+  });
+
+  test('_handleToggle: a configured control_entity calls turn_on and notifies "starting"', async () => {
+    const card = freshCard();
+    card.setConfig({ containers: [baseContainer()] });
+    const { hass, calls } = fakeHass({ states: { 'sensor.plex_status': { state: 'stopped' } }, language: 'en' });
+    card.hass = hass;
+    let notified = null;
+    card.addEventListener('hass-notification', (e) => { notified = e.detail.message; });
+    const fakeSwitch = { checked: true, disabled: false };
+    await card._handleToggle(card.config.containers[0], true, fakeSwitch);
+    assertEqual(calls[0].domain, 'switch');
+    assertEqual(calls[0].service, 'turn_on');
+    assertEqual(calls[0].data.entity_id, 'switch.plex');
+    assertEqual(notified, 'Starting plex…');
+  });
+
+  // ---------------------------------------------------------------------
+  // Security — escaping
+  // ---------------------------------------------------------------------
+  test('A malicious container name never produces a real DOM element from the injected markup', () => {
+    const card = freshCard();
+    window.__pwned = false;
+    card.setConfig({ containers: [baseContainer({ name: '<img src=x onerror="window.__pwned=true">' })] });
+    card.hass = fakeHass({ states: { 'sensor.plex_status': { state: 'running' } } }).hass;
+    assertTrue(!window.__pwned, '_esc must have neutralized the payload');
+    assertEqual(card.querySelectorAll('.dc-name img').length, 0, 'no real <img> should have been created from the name');
+  });
+
+  test('A javascript: release_notes URL never renders as a real link', () => {
+    const card = freshCard();
+    card.setConfig({ containers: [baseContainer({ update_entity: 'update.plex' })] });
+    card.hass = fakeHass({
+      states: {
+        'sensor.plex_status': { state: 'running' },
+        'update.plex': { state: 'Yes', attributes: { current_version: '1.0', new_version: '1.1', release_notes: 'javascript:alert(1)' } },
+      },
+    }).hass;
+    assertEqual(card.querySelectorAll('.dc-update-link').length, 0, 'an unsafe URL must not render as a link at all');
+  });
+
+  // ---------------------------------------------------------------------
+  // Aggregate "N updates available" overview tile (updates_summary)
+  // ---------------------------------------------------------------------
+  test('updates_summary: off by default, no tile even when updates are pending', () => {
+    const card = freshCard();
+    card.setConfig({ containers: [baseContainer({ update_entity: 'update.plex' })] });
+    card.hass = fakeHass({
+      states: { 'update.plex': { state: 'Yes', attributes: { new_version: '1.1' } } },
+    }).hass;
+    assertEqual(card.querySelectorAll('.dc-ov-item').length, 0);
+  });
+
+  test('updates_summary: true counts containers with a pending update, ignores ones without', () => {
+    const card = freshCard();
+    card.setConfig({
+      docker_overview: { updates_summary: true },
+      containers: [
+        baseContainer({ update_entity: 'update.plex' }),
+        baseContainer({ name: 'sonarr', update_entity: 'update.sonarr' }),
+      ],
+    });
+    card.hass = fakeHass({
+      states: {
+        'update.plex': { state: 'Yes', attributes: { new_version: '1.1' } },
+        'update.sonarr': { state: 'No' },
+      },
+    }).hass;
+    const label = Array.from(card.querySelectorAll('.dc-ov-label')).find((el) => el.textContent === 'Updates available');
+    assertTrue(!!label, 'expected an "Updates available" tile');
+    assertEqual(label.nextElementSibling.textContent, '1');
+  });
+
+  test('updates_summary: true but zero pending updates hides the tile', () => {
+    const card = freshCard();
+    card.setConfig({ docker_overview: { updates_summary: true }, containers: [baseContainer({ update_entity: 'update.plex' })] });
+    card.hass = fakeHass({ states: { 'update.plex': { state: 'No' } } }).hass;
+    const label = Array.from(card.querySelectorAll('.dc-ov-label')).find((el) => el.textContent === 'Updates available');
+    assertTrue(!label, 'expected no tile when the count is 0');
+  });
+
+  // ---------------------------------------------------------------------
+  // Network I/O graphs (#19) — which direction(s) render is controlled purely
+  // by which of network_rx_entity/network_tx_entity is configured.
+  // ---------------------------------------------------------------------
+  test('Network graph: graphs enable even with no cpu_entity/memory_entity configured, using only network entities', () => {
+    const card = freshCard();
+    card.setConfig({ graphs: true, containers: [baseContainer({ network_rx_entity: 'sensor.plex_net_rx' })] });
+    card.hass = fakeHass({ states: { 'sensor.plex_net_rx': { state: '4.2', attributes: { unit_of_measurement: 'MB/s' } } } }).hass;
+    assertTrue(!!card.querySelector('.dc-graphs'), 'expected the graphs container to render');
+    const label = Array.from(card.querySelectorAll('.dc-graph-label')).find((el) => el.textContent === 'Network');
+    assertTrue(!!label, 'expected a Network graph block');
+  });
+
+  test('Network graph: only network_rx_entity configured renders a single-line graph (with area fill) and a plain value', async () => {
+    const card = freshCard();
+    card.setConfig({ graphs: true, containers: [baseContainer({ network_rx_entity: 'sensor.plex_net_rx' })] });
+    card.hass = fakeHass({
+      states: { 'sensor.plex_net_rx': { state: '4.2', attributes: { unit_of_measurement: 'MB/s' } } },
+      callApiImpl: () => Promise.resolve(fakeHistory(10, 3)),
+    }).hass;
+    await wait(100);
+    const graph = Array.from(card.querySelectorAll('.dc-graph')).find((el) => el.querySelector('.dc-graph-label')?.textContent === 'Network');
+    assertTrue(!!graph, 'expected the Network graph block');
+    assertEqual(graph.querySelectorAll('polygon').length, 1, 'a single configured direction should still use the area-filled single-line style');
+    assertEqual(graph.querySelectorAll('polyline').length, 1);
+    assertTrue(graph.querySelector('.dc-graph-value').textContent.includes('4.2'), 'expected the live RX value in the header');
+  });
+
+  test('Network graph: both network_rx_entity and network_tx_entity render two lines sharing one graph, no area fill, with down/up labeled values', async () => {
+    const card = freshCard();
+    card.setConfig({
+      graphs: true,
+      containers: [baseContainer({ network_rx_entity: 'sensor.plex_net_rx', network_tx_entity: 'sensor.plex_net_tx' })],
+    });
+    card.hass = fakeHass({
+      states: {
+        'sensor.plex_net_rx': { state: '3.1', attributes: { unit_of_measurement: 'MB/s' } },
+        'sensor.plex_net_tx': { state: '1.1', attributes: { unit_of_measurement: 'MB/s' } },
+      },
+      callApiImpl: () => Promise.resolve(fakeHistory(10, 2)),
+    }).hass;
+    await wait(100);
+    const graph = Array.from(card.querySelectorAll('.dc-graph')).find((el) => el.querySelector('.dc-graph-label')?.textContent === 'Network');
+    assertTrue(!!graph, 'expected the Network graph block');
+    assertEqual(graph.querySelectorAll('polygon').length, 0, 'the dual-line style must not draw an area fill');
+    assertEqual(graph.querySelectorAll('polyline').length, 2, 'expected two lines, one per direction');
+    const values = graph.querySelectorAll('.dc-graph-dual-value .dc-graph-value');
+    assertEqual(values.length, 2);
+    assertTrue(values[0].textContent.includes('3.1'), 'expected the RX value with a down arrow');
+    assertTrue(values[1].textContent.includes('1.1'), 'expected the TX value with an up arrow');
+  });
+
+  // ---------------------------------------------------------------------
+  // Prune flow — arm -> confirm -> service call (driven through real DOM clicks)
+  // ---------------------------------------------------------------------
+  test('Prune: arm shows the inline confirm step, Confirm calls button.press on the prune entity', async () => {
+    const card = freshCard();
+    card.setConfig({ containers: [], docker_overview: { prune_images: 'button.docker_prune' } });
+    const { hass, calls } = fakeHass({});
+    card.hass = hass;
+    card.querySelector('[data-prune-arm]').click();
+    assertTrue(!!card.querySelector('[data-prune-confirm]'), 'expected the confirm step to appear after arming');
+    card.querySelector('[data-prune-confirm]').click();
+    await wait(10);
+    assertEqual(calls[0].domain, 'button');
+    assertEqual(calls[0].service, 'press');
+    assertEqual(calls[0].data.entity_id, 'button.docker_prune');
+  });
+
+  // ---------------------------------------------------------------------
+  // Generalized maintenance actions (#17) — Prune Volumes / Networks reuse
+  // the same arm -> confirm -> service call flow, keyed independently.
+  // ---------------------------------------------------------------------
+  test('Prune Volumes: arm/confirm calls button.press on the configured volumes entity', async () => {
+    const card = freshCard();
+    card.setConfig({ containers: [], docker_overview: { prune_volumes: 'button.docker_prune_volumes' } });
+    const { hass, calls } = fakeHass({});
+    card.hass = hass;
+    card.querySelector('[data-prune-volumes-arm]').click();
+    assertTrue(!!card.querySelector('[data-prune-volumes-confirm]'), 'expected the confirm step to appear after arming');
+    card.querySelector('[data-prune-volumes-confirm]').click();
+    await wait(10);
+    assertEqual(calls[0].domain, 'button');
+    assertEqual(calls[0].service, 'press');
+    assertEqual(calls[0].data.entity_id, 'button.docker_prune_volumes');
+  });
+
+  test('Prune Networks: arm/confirm calls button.press on the configured networks entity', async () => {
+    const card = freshCard();
+    card.setConfig({ containers: [], docker_overview: { prune_networks: 'button.docker_prune_networks' } });
+    const { hass, calls } = fakeHass({});
+    card.hass = hass;
+    card.querySelector('[data-prune-networks-arm]').click();
+    card.querySelector('[data-prune-networks-confirm]').click();
+    await wait(10);
+    assertEqual(calls[0].data.entity_id, 'button.docker_prune_networks');
+  });
+
+  test('Maintenance actions: Images, Volumes and Networks can each be armed independently without cross-talk', () => {
+    const card = freshCard();
+    card.setConfig({
+      containers: [],
+      docker_overview: {
+        prune_images: 'button.docker_prune_images',
+        prune_volumes: 'button.docker_prune_volumes',
+        prune_networks: 'button.docker_prune_networks',
+      },
+    });
+    card.hass = fakeHass({}).hass;
+    card.querySelector('[data-prune-volumes-arm]').click();
+    assertTrue(!!card.querySelector('[data-prune-volumes-confirm]'), 'volumes should be armed');
+    assertTrue(!!card.querySelector('[data-prune-arm]'), 'images should still be idle');
+    assertTrue(!!card.querySelector('[data-prune-networks-arm]'), 'networks should still be idle');
+  });
+
+  test('Maintenance: Prune Images shares a tile with WUD scan when it is the ONLY maintenance action configured', () => {
+    const card = freshCard();
+    card.setConfig({
+      containers: [],
+      docker_overview: { wud_scan: 'button.wud_scan_all', prune_images: 'button.docker_prune_images' },
+    });
+    card.hass = fakeHass({}).hass;
+    assertEqual(card.querySelectorAll('.dc-maint').length, 1, 'WUD + the sole Prune action should share exactly one .dc-maint tile');
+  });
+
+  test('Maintenance: with Volumes also configured, Prune Images no longer shares a tile with WUD scan — all three render standalone for consistency', () => {
+    const card = freshCard();
+    card.setConfig({
+      containers: [],
+      docker_overview: {
+        wud_scan: 'button.wud_scan_all',
+        prune_images: 'button.docker_prune_images',
+        prune_volumes: 'button.docker_prune_volumes',
+      },
+    });
+    card.hass = fakeHass({}).hass;
+    assertEqual(card.querySelectorAll('.dc-maint').length, 0, 'no shared tile once more than one maintenance action is configured');
+    assertTrue(!!card.querySelector('[data-wud-scan]'), 'WUD scan should still render, on its own');
+    assertTrue(!!card.querySelector('[data-prune-arm]'), 'Prune Images should render standalone');
+    assertTrue(!!card.querySelector('[data-prune-volumes-arm]'), 'Prune Volumes should render standalone');
+  });
+
+  test('Prune: Cancel returns to the idle "Prune now" state without calling anything', () => {
+    const card = freshCard();
+    card.setConfig({ containers: [], docker_overview: { prune_images: 'button.docker_prune' } });
+    const { hass, calls } = fakeHass({});
+    card.hass = hass;
+    card.querySelector('[data-prune-arm]').click();
+    card.querySelector('[data-prune-cancel]').click();
+    assertEqual(calls.length, 0);
+    assertTrue(!!card.querySelector('[data-prune-arm]'), 'expected to be back at the idle "Prune now" tile');
+  });
+
+  // ---------------------------------------------------------------------
+  // WUD scan
+  // ---------------------------------------------------------------------
+  test('WUD scan tile calls button.press on the configured scan entity', async () => {
+    const card = freshCard();
+    card.setConfig({ containers: [], docker_overview: { wud_scan: 'button.wud_scan_all' } });
+    const { hass, calls } = fakeHass({});
+    card.hass = hass;
+    card.querySelector('[data-wud-scan]').click();
+    await wait(10);
+    assertEqual(calls[0].domain, 'button');
+    assertEqual(calls[0].service, 'press');
+    assertEqual(calls[0].data.entity_id, 'button.wud_scan_all');
+  });
+
+  const resultsEl = document.getElementById('results');
+  const summaryEl = document.getElementById('summary');
+  let passCount = 0;
+  let failCount = 0;
+
+  for (const { name, fn } of cases) {
+    const li = document.createElement('li');
+    try {
+      await fn();
+      passCount++;
+      li.className = 'pass';
+      li.textContent = `✓ ${name}`;
+    } catch (err) {
+      failCount++;
+      li.className = 'fail';
+      li.innerHTML = `✗ ${name}<span class="err"></span>`;
+      li.querySelector('.err').textContent = err.stack || String(err);
+      console.error(`FAIL: ${name}`, err);
+    }
+    resultsEl.appendChild(li);
+  }
+
+  summaryEl.className = `summary ${failCount === 0 ? 'pass' : 'fail'}`;
+  summaryEl.textContent = `${passCount}/${cases.length} passed` + (failCount ? ` — ${failCount} FAILED` : '');
+  window.__testSummary = { total: cases.length, passed: passCount, failed: failCount };
+  console.log(`docker-card-extended tests: ${passCount}/${cases.length} passed`);
+})();
+</script>
+</body>
+</html>
